@@ -1,0 +1,6 @@
+customtkinter
+packaging
+pillow
+colorama
+requests
+tqdm
