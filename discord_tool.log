@@ -1,0 +1,27 @@
+2026-01-14 16:27:47,305 - INFO - === Discord Bulk Message Tool ===
+2026-01-14 16:27:47,305 - WARNING - SAFETY NOTICE: Automating user accounts is against Discord TOS.
+2026-01-14 16:27:47,305 - WARNING - Use this tool at your own risk. Delays are implemented for safety.
+2026-01-14 16:27:47,305 - INFO - Please enter your Discord User Token.
+2026-01-14 16:27:47,305 - INFO - To find this: Open Discord > Ctrl+Shift+I > Network Tab > Filter 'api' > Refresh > Click a Request > Look for 'Authorization' header.
+2026-01-14 16:29:06,262 - INFO - === Discord Bulk Message Tool ===
+2026-01-14 16:29:06,262 - WARNING - SAFETY NOTICE: Automating user accounts is against Discord TOS.
+2026-01-14 16:29:06,263 - WARNING - Use this tool at your own risk. Delays are implemented for safety.
+2026-01-14 16:29:06,263 - INFO - Please enter your Discord User Token.
+2026-01-14 16:29:06,263 - INFO - To find this: Open Discord > Ctrl+Shift+I > Network Tab > Filter 'api' > Refresh > Click a Request > Look for 'Authorization' header.
+2026-01-14 16:29:12,124 - INFO - Logged in as meghoul#0
+2026-01-14 16:30:17,116 - INFO - Scanning for messages... (This relies on Discord Search API)
+2026-01-14 16:30:17,884 - INFO - Found 25 messages so far...
+2026-01-14 16:30:19,847 - INFO - Found 50 messages so far...
+2026-01-14 16:30:21,751 - INFO - Found 75 messages so far...
+2026-01-14 16:30:23,679 - INFO - Found 100 messages so far...
+2026-01-14 16:30:25,644 - INFO - Found 110 messages so far...
+2026-01-14 16:30:25,645 - INFO - Scan complete. Found 110 total messages matches.
+2026-01-14 16:30:30,946 - INFO - Preparing to delete 3 messages...
+2026-01-14 16:30:31,258 - INFO - Deleted message 1449190200277205164 in channel 1410303086290800845
+2026-01-14 16:30:33,111 - INFO - Deleted message 1449190139749335184 in channel 1410303086290800845
+2026-01-14 16:30:34,735 - INFO - Deleted message 1449190116496117810 in channel 1410303086290800845
+2026-01-14 16:30:36,249 - INFO - Deletion complete.
+2026-01-14 16:30:36,249 - INFO - Deleted: 3
+2026-01-14 16:30:36,249 - INFO - Failed: 0
+2026-02-08 01:20:35,627 - ERROR - Unauthorized: Invalid Token.
+2026-02-08 01:20:45,128 - ERROR - Unauthorized: Invalid Token.
