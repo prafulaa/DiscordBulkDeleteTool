@@ -20,8 +20,13 @@ first, and stay rate-limit safe with built-in pacing.
 
 ## Features
 
+- **Zero-ID browsing** — after login, your servers appear as icons in the
+  rail and your DMs / a server's text channels fill the sidebar. Click one
+  and your messages appear instantly. No IDs to type.
 - **GUI + CLI** — a Discord-styled desktop app (`gui.py`) and an interactive
   terminal flow (`main.py`).
+- **Discord-style selection** — click rows, drag-sweep across them, or press
+  `Ctrl+A`; then hit `Delete` and confirm with `ENTER` (`ESC` cancels).
 - **Time-range presets** — wipe everything from the last minute, 5/15/30
   minutes, 1/6/12/24 hours, 7 or 30 days, or pick custom after/before dates.
 - **Selective deletion** — keyword filter, date ranges, and a dense chat-style

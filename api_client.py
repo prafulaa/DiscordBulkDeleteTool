@@ -152,6 +152,44 @@ class DiscordClient:
             self.user_id = data["id"]
         return data
 
+    # --- Discovery (browse without typing IDs) ------------------------------
+
+    def fetch_guilds(self):
+        """Servers the account is in (first page — 200 covers the max a
+        non-bot account can join). Returns [{id, name, icon}, …]."""
+        return self.request_json("GET", "/users/@me/guilds", params={"limit": 200}) or []
+
+    def fetch_guild_channels(self, guild_id):
+        """Text-like channels (type 0 text, type 5 announcement) of a guild,
+        ordered by position."""
+        channels = self.request_json("GET", f"/guilds/{guild_id}/channels") or []
+        text_like = [c for c in channels if c.get("type") in (0, 5)]
+        text_like.sort(key=lambda c: (c.get("position", 0), c.get("id", "")))
+        return text_like
+
+    def fetch_dm_channels(self):
+        """DM and group-DM channels (type 1 / 3) with a normalized shape:
+        [{id, name, recipient}], name falls back to the first recipient."""
+        channels = self.request_json("GET", "/users/@me/channels") or []
+        normalized = []
+        for channel in channels:
+            if channel.get("type") not in (1, 3):
+                continue
+            recipients = channel.get("recipients") or []
+            first = recipients[0] if recipients else {}
+            name = first.get("global_name") or first.get("username") or "Unknown"
+            if channel.get("type") == 3 and len(recipients) > 1:
+                name = f"Group ({len(recipients)} members)"
+            normalized.append(
+                {
+                    "id": channel["id"],
+                    "type": channel.get("type"),
+                    "name": name,
+                    "recipient": first,
+                }
+            )
+        return normalized
+
     def search_messages(
         self,
         guild_id=None,

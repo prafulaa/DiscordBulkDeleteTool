@@ -238,3 +238,58 @@ def save_app_icon(path, size=64):
     icon = generate_app_icon(size)
     icon.save(path, format="ICO", sizes=[(16, 16), (32, 32), (48, 48), (64, 64)])
     return path
+
+
+# --- Discord CDN imagery -------------------------------------------------------
+
+_IMAGE_CACHE = {}
+
+
+def circular(img):
+    """Crop an image to a centered circle (RGBA)."""
+    img = img.convert("RGBA")
+    side = min(img.size)
+    left = (img.width - side) // 2
+    top = (img.height - side) // 2
+    img = img.crop((left, top, left + side, top + side))
+    mask = Image.new("L", (side * 4, side * 4), 0)
+    ImageDraw.Draw(mask).ellipse([0, 0, side * 4 - 1, side * 4 - 1], fill=255)
+    mask = mask.resize((side, side), _resample())
+    img.putalpha(mask)
+    return img
+
+
+def fetch_discord_image(url, size_px):
+    """Fetch an image from the Discord CDN (icons/avatars are public) and
+    return a circular RGBA PIL image, or None on any failure. Results are
+    cached per URL."""
+    if not url:
+        return None
+    if url in _IMAGE_CACHE:
+        return _IMAGE_CACHE[url]
+    try:
+        import requests
+
+        response = requests.get(url, timeout=6)
+        response.raise_for_status()
+        import io
+
+        img = Image.open(io.BytesIO(response.content)).convert("RGBA")
+        img = _cover_resize(img, size_px * 2, size_px * 2)
+        img = circular(img)
+        _IMAGE_CACHE[url] = img
+        return img
+    except Exception:
+        return None
+
+
+def guild_icon_url(guild_id, icon_hash, size=64):
+    if not icon_hash:
+        return None
+    return f"https://cdn.discordapp.com/icons/{guild_id}/{icon_hash}.png?size={size}"
+
+
+def user_avatar_url(user_id, avatar_hash, size=64):
+    if not avatar_hash:
+        return None
+    return f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.png?size={size}"

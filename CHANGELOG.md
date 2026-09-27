@@ -4,6 +4,35 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.3.0] - 2026-09-27
+
+### Added
+- **Zero-ID browsing**: after login the app fetches your joined servers
+  (`/users/@me/guilds`) and DM list (`/users/@me/channels`) automatically —
+  the server rail shows circular guild icons (CDN-fetched, initial-letter
+  fallback), the sidebar lists your DMs with avatars or a guild's text
+  channels. Clicking a DM or channel scans it instantly — no more typing
+  channel/guild/message IDs.
+- **Discord-style selection & keyboard flow** (verified end-to-end with
+  desktop automation): click a row to toggle, press-and-drag to sweep-select
+  rows, `Ctrl+A` selects everything, the `Delete` key arms the deletion
+  (red banner: "Press ENTER to permanently delete N messages — ESC to
+  cancel"), `ENTER` confirms, `ESC` cancels. The confirmation-dialog setting
+  still allows immediate deletion when disabled.
+- Live SESSION stats card (found / selected / deleted this session).
+- `scripts/demo.py` — launches the app against a fake Discord client
+  (auth locked to demo mode) for offline testing and screenshots.
+
+### Fixed
+- Race condition where rapid channel switching interleaved queued UI
+  updates (scan-generation guard: superseded scan batches are dropped).
+- Sweep selection ignored clicks on message text (bindings now cover every
+  child widget) and drag-sweep now tracks the row under the pointer via
+  `winfo_containing`, because tkinter's implicit button grab suppresses
+  `<Enter>` events on other rows mid-drag.
+- Thread-safety: all worker-thread UI updates now flow through a queue
+  drained on the main thread instead of calling `after()` cross-thread.
+
 ## [3.2.0] - 2026-09-27
 
 ### Added
