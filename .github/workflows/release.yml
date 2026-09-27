@@ -28,7 +28,7 @@ jobs:
           pip install pytest pyinstaller
 
       - name: Run tests
-        run: pytest -q
+        run: python -m pytest -q
 
       - name: Build executables
         run: |
