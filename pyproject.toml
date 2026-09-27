@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "discord-bulk-delete-tool"
+version = "3.0.0"
+description = "Safely bulk delete your own Discord messages in DMs and servers"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "prafulaa" }]
+keywords = ["discord", "bulk-delete", "message-cleaner", "privacy", "gdpr"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Communications :: Chat",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "requests>=2.32.0",
+    "colorama>=0.4.6",
+    "python-dateutil>=2.8.2",
+    "tqdm>=4.66.0",
+    "customtkinter>=5.2.2",
+    "pillow>=10.0.0",
+    "packaging>=23.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.4"]
+
+[project.scripts]
+discord-tool = "main:run_cli"
+
+[project.gui-scripts]
+discord-tool-gui = "gui:main"
+
+[tool.setuptools]
+py-modules = ["api_client", "auth", "deleter", "gui", "main", "token_finder", "utils"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py39"
+exclude = ["build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

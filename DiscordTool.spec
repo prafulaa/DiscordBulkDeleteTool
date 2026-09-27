@@ -1,8 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
-
-
+# CLI build:  pyinstaller DiscordTool.spec
 a = Analysis(
-    ['gui.py'],
+    ['main.py'],
     pathex=[],
     binaries=[],
     datas=[],
@@ -22,18 +21,17 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='DiscordTool',
+    name='DiscordBulkDeleteTool-CLI',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='NONE',
 )
