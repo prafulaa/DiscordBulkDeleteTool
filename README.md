@@ -9,6 +9,8 @@ Bulk delete **your own** messages from Discord DMs and servers — with a modern
 desktop GUI or a CLI. Filter by keyword and date range, preview everything
 first, and stay rate-limit safe with built-in pacing.
 
+![Screenshot of the Discord-themed GUI](docs/screenshot.png)
+
 > [!WARNING]
 > **USE AT YOUR OWN RISK.** Automating a user account ("self-botting") is
 > technically a violation of [Discord's Terms of Service](https://discord.com/terms).
@@ -69,6 +71,18 @@ The GUI's **Auto-Find** button can also read a plaintext token from the
 locally installed Discord desktop app (Windows/macOS/Linux). It deliberately
 does *not* touch browsers or decrypt anything — newer Discord versions store
 the token encrypted, in which case just paste it manually.
+
+## Theming & credits
+
+The UI takes its visual cues from Discord's dark theme and the excellent
+[ClearVision](https://github.com/ClearVision/ClearVision-v6) theme (Apache-2.0)
+— icon rail, channel sidebar, chat-style message list and all.
+
+- **No third-party images are bundled.** The aurora wallpaper and the avatars
+  are generated procedurally at runtime with Pillow (`theme.py`).
+- **Custom wallpaper**: drop your own image at `assets/background.png` and it
+  is cover-fitted and darkened automatically. If the image isn't yours, make
+  sure its license allows it and credit its author.
 
 ## Usage
 
@@ -132,12 +146,14 @@ Tagged releases (`v*`) are built and attached automatically by GitHub Actions.
 ```
 api_client.py     Discord REST client (timeouts, retries, rate limits)
 deleter.py        Scan + bulk-delete engine (pagination, dry-run, cancellation)
-gui.py            CustomTkinter desktop app
+gui.py            CustomTkinter desktop app (Discord/ClearVision-style UI)
+theme.py          Procedural wallpaper + avatars (Pillow, no bundled images)
 main.py           Interactive CLI
 auth.py           Token loading (env var / token.txt / prompt)
 token_finder.py   Optional: find plaintext token from the local Discord app
 utils.py          Logging, snowflake/date helpers
-tests/            pytest suite (68 tests)
+scripts/          Dev utilities (GUI screenshot generator)
+tests/            pytest suite (76 tests)
 ```
 
 ## Development

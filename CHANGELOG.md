@@ -4,6 +4,29 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.1.0] - 2026-09-27
+
+### Added
+- Complete Discord-themed UI redesign inspired by the
+  [ClearVision](https://github.com/ClearVision/ClearVision-v6) theme
+  (Apache-2.0): icon rail, channel-style sidebar with sectioned controls,
+  selectable DM/Guild rows with blurple pill highlight, chat-style message
+  cards with avatars, and a bottom action bar.
+- Procedurally generated aurora wallpaper and initial-letter avatars
+  (`theme.py`, pure Pillow) — no third-party image assets are bundled.
+- Optional custom wallpaper: drop an image at `assets/background.png`.
+- Click anywhere on a message card to toggle its selection.
+- New About dialog (profile-card style) with theme credits and GitHub link.
+- High-DPI awareness on Windows for crisp rendering on scaled displays.
+- `scripts/screenshot.py` — regenerates the README screenshot with demo data.
+- 8 new tests for the theme module (wallpaper determinism/darkness, avatars,
+  custom background loading) — 76 total.
+
+### Fixed
+- Sidebar layout: sections now render reliably (grid column sizing no longer
+  pushes labels out of view).
+- Login/auto-find button rows and the user panel render on every launch.
+
 ## [3.0.0] - 2026-09-27
 
 ### Added
