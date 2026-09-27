@@ -113,8 +113,8 @@ def _edit_settings(app_settings):
     print("\n--- Settings ---")
     print(f"Delete delay range: {app_settings['delete_delay_min']}-"
           f"{app_settings['delete_delay_max']}s per message")
-    print(f"Search delay range: {app_settings['search_delay_min']}-"
-          f"{app_settings['search_delay_max']}s per request")
+    print(f"Scan delay range: {app_settings['scan_delay_min']}-"
+          f"{app_settings['scan_delay_max']}s per request")
     print(f"Abort after: {app_settings['max_consecutive_failures']} consecutive failures")
     print(f"Confirm before deleting: {'yes' if app_settings['confirm_before_delete'] else 'no'}")
     print("Press Enter to keep a value unchanged. Slower is safer (Discord ToS).")
@@ -129,8 +129,8 @@ def _edit_settings(app_settings):
 
     ask_number(f"New delete delay min (s) [{app_settings['delete_delay_min']}]: ", "delete_delay_min")
     ask_number(f"New delete delay max (s) [{app_settings['delete_delay_max']}]: ", "delete_delay_max")
-    ask_number(f"New search delay min (s) [{app_settings['search_delay_min']}]: ", "search_delay_min")
-    ask_number(f"New search delay max (s) [{app_settings['search_delay_max']}]: ", "search_delay_max")
+    ask_number(f"New scan delay min (s) [{app_settings['scan_delay_min']}]: ", "scan_delay_min")
+    ask_number(f"New scan delay max (s) [{app_settings['scan_delay_max']}]: ", "scan_delay_max")
     ask_number(f"Abort after N failures [{app_settings['max_consecutive_failures']}]: ",
                "max_consecutive_failures", cast=int)
     raw = input("Confirm before deleting? (y/n, Enter to keep): ").strip().lower()

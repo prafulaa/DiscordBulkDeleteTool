@@ -23,6 +23,12 @@ first, and stay rate-limit safe with built-in pacing.
 - **Zero-ID browsing** — after login, your servers appear as icons in the
   rail and your DMs / a server's text channels fill the sidebar. Click one
   and your messages appear instantly. No IDs to type.
+- **⚡ Aggregate scans** — "All Direct Messages" and "All Channels" rows scan
+  everything in one click, and an all-DMs scan starts automatically after
+  login — your messages appear without clicking anything.
+- **Fast history scanning** — reads channel history at 100 messages per
+  request with adaptive pacing (~10× faster than the old search-based scan),
+  and time-range filters short-circuit pagination.
 - **GUI + CLI** — a Discord-styled desktop app (`gui.py`) and an interactive
   terminal flow (`main.py`).
 - **Discord-style selection** — click rows, drag-sweep across them, or press
@@ -33,11 +39,9 @@ first, and stay rate-limit safe with built-in pacing.
   timeline in the GUI (with Discord-style message grouping and hover details).
 - **Dry-run mode** — preview exactly what would be deleted before anything
   happens.
-- **Settings that persist** — tune deletion/search delay ranges, the
+- **Settings that persist** — tune deletion/scan delay ranges, the
   consecutive-failure abort limit, and confirmation prompts (saved to
   `settings.json`, editable in-app via the ⚙ rail button or CLI menu option 3).
-- **Big-channel support** — Discord caps search results at 5,000; the scan
-  automatically re-windows and keeps going past that cap.
 - **Rate-limit safe** — honors Discord's `429` responses and `Retry-After`
   headers, with randomized human-like pacing between deletions.
 - **Cancel anytime** — a STOP button in the GUI (Ctrl+C in the CLI) halts

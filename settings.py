@@ -17,8 +17,8 @@ SETTINGS_FILE = Path(__file__).resolve().parent / "settings.json"
 FLOAT_SETTINGS = {
     "delete_delay_min": (1.2, 0.5, 10.0),
     "delete_delay_max": (2.0, 0.5, 10.0),
-    "search_delay_min": (1.0, 0.5, 10.0),
-    "search_delay_max": (2.0, 0.5, 10.0),
+    "scan_delay_min": (0.35, 0.2, 5.0),
+    "scan_delay_max": (0.7, 0.2, 5.0),
 }
 INT_SETTINGS = {
     "max_consecutive_failures": (15, 1, 100),
@@ -70,7 +70,7 @@ def load_settings():
     # Keep the pacing window sane: min must not exceed max.
     for lo_key, hi_key in (
         ("delete_delay_min", "delete_delay_max"),
-        ("search_delay_min", "search_delay_max"),
+        ("scan_delay_min", "scan_delay_max"),
     ):
         if settings[lo_key] > settings[hi_key]:
             settings[lo_key], settings[hi_key] = settings[hi_key], settings[lo_key]
@@ -100,7 +100,7 @@ def save_settings(settings):
 
     for lo_key, hi_key in (
         ("delete_delay_min", "delete_delay_max"),
-        ("search_delay_min", "search_delay_max"),
+        ("scan_delay_min", "scan_delay_max"),
     ):
         if clean[lo_key] > clean[hi_key]:
             clean[lo_key], clean[hi_key] = clean[hi_key], clean[lo_key]

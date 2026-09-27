@@ -123,9 +123,8 @@ class DemoClient:
     def fetch_guild_channels(self, guild_id):
         return [dict(c) for c in DEMO_GUILD_CHANNELS.get(guild_id, [])]
 
-    def search_messages(self, **_kwargs):
-        page = demo_messages(_kwargs.get("channel_id") or "0")
-        return {"messages": [[message] for message in page], "total_results": len(page)}
+    def fetch_history(self, channel_id, before=None, after=None, limit=100):
+        return demo_messages(channel_id)
 
     def delete_message(self, _channel_id, _message_id):
         return "deleted"

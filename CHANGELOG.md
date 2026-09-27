@@ -4,6 +4,28 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.4.0] - 2026-09-27
+
+### Added
+- **~10× faster scanning**: the scan now walks each channel's message
+  **history** (100 messages per request, uncapped) instead of the search
+  endpoint (25 per request, hard 5,000 cap, harsh rate limits).
+- **Aggregate scans, zero clicking**: an "⚡ All Direct Messages" row appears
+  above your DM list and "⚡ All Channels" above a server's channels — one
+  click scans every channel in the group into a single timeline. Logging in
+  automatically starts an all-DMs scan so your messages appear without any
+  clicks at all.
+- Per-channel progress ("Scanning DMs: 12 left — Alice…") during aggregate
+  scans, cancellable with STOP.
+- Time-range windows now short-circuit the scan (pagination stops as soon as
+  messages fall below the lower bound instead of reading the whole channel).
+
+### Changed
+- Scan delays split from delete delays (`scan_delay_min/max` settings,
+  0.35–0.7s defaults — history requests are far more rate-limit friendly
+  than search was). Existing settings files keep working.
+- Removed the search-endpoint scan path and its 5,000-result cap entirely.
+
 ## [3.3.0] - 2026-09-27
 
 ### Added

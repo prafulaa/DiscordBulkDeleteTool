@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 from colorama import Fore, Style, init
 
-VERSION = "3.3.0"
+VERSION = "3.4.0"
 
 DISCORD_EPOCH_MS = 1420070400000  # 2015-01-01T00:00:00Z
 SNOWFLAKE_RE = re.compile(r"^\d{15,21}$")

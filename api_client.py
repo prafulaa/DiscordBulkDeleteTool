@@ -190,6 +190,19 @@ class DiscordClient:
             )
         return normalized
 
+    def fetch_history(self, channel_id, before=None, after=None, limit=100):
+        """Fetch raw channel history (newest-first), 100 messages per request.
+
+        This is the fast scan path: 4× more messages per request than the
+        search endpoint and far friendlier rate limits. The caller filters
+        for its own messages client-side."""
+        params = {"limit": min(limit, 100)}
+        if before:
+            params["before"] = before
+        if after:
+            params["after"] = after
+        return self.request_json("GET", f"/channels/{channel_id}/messages", params=params) or []
+
     def search_messages(
         self,
         guild_id=None,

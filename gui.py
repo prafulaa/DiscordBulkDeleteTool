@@ -700,9 +700,15 @@ class DiscordToolGUI(ctk.CTk):
                 self.dm_channels = dms
                 self._populate_guild_rail()
                 self._show_home()
-                self._set_status(
-                    f"Loaded {len(guilds)} servers and {len(dms)} DMs — pick one from the left."
-                )
+                if dms:
+                    # Zero-click start: scan every DM right after login.
+                    self._select_channel("__all_dms__", "All Direct Messages", "aggregate")
+                    self._set_status(
+                        f"Loaded {len(guilds)} servers and {len(dms)} DMs — "
+                        "scanning all your DMs…"
+                    )
+                else:
+                    self._set_status(f"Loaded {len(guilds)} servers, no DMs found.")
 
             self._post(apply)
 
@@ -914,6 +920,11 @@ class DiscordToolGUI(ctk.CTk):
                 text_color=C["text_faint"], font=ctk.CTkFont(family=FONT, size=11),
             ).pack(anchor="w", padx=8, pady=6)
             return
+        self._add_channel_row(
+            channel_id="__all_dms__", label="All Direct Messages", kind="aggregate",
+            channel={"id": "__all_dms__", "name": "All Direct Messages", "kind": "aggregate"},
+            avatar_name=None, avatar_url=None, bold=True,
+        )
         for dm in self.dm_channels:
             self._add_channel_row(
                 channel_id=dm["id"], label=dm["name"], kind="dm", channel=dm,
@@ -934,6 +945,13 @@ class DiscordToolGUI(ctk.CTk):
                 text_color=C["text_faint"], font=ctk.CTkFont(family=FONT, size=11),
             ).pack(anchor="w", padx=8, pady=6)
             return
+        self._add_channel_row(
+            channel_id=f"__all_channels_{guild['id']}__", label="All Channels",
+            kind="aggregate",
+            channel={"id": f"__all_channels_{guild['id']}__", "name": "All Channels",
+                     "kind": "aggregate"},
+            avatar_name=None, avatar_url=None, bold=True,
+        )
         for channel in channels:
             self._add_channel_row(
                 channel_id=channel["id"], label=channel.get("name", "channel"),
@@ -945,8 +963,8 @@ class DiscordToolGUI(ctk.CTk):
             widget.destroy()
         self._channel_rows.clear()
 
-    def _add_channel_row(self, channel_id, label, kind, channel, avatar_name, avatar_url):
-        prefix = "@  " if kind == "dm" else "#  "
+    def _add_channel_row(self, channel_id, label, kind, channel, avatar_name, avatar_url, bold=False):
+        prefix = "⚡  " if kind == "aggregate" else ("@  " if kind == "dm" else "#  ")
         image = None
         if kind == "dm":
             image = (
@@ -958,7 +976,7 @@ class DiscordToolGUI(ctk.CTk):
             text=f" {prefix}{label}" if image is None else f" {label}",
             image=image, compound="left", anchor="w", height=36, corner_radius=8,
             fg_color="transparent", hover_color=C["hover"], text_color=C["text_muted"],
-            font=ctk.CTkFont(family=FONT, size=12),
+            font=ctk.CTkFont(family=FONT, size=12, weight="bold" if bold else "normal"),
             command=lambda: self._select_channel(channel_id, label, kind),
         )
         row.pack(fill="x", pady=1)
@@ -986,6 +1004,9 @@ class DiscordToolGUI(ctk.CTk):
             return
         if channel["kind"] == "dm":
             self.lbl_target.configure(text=f"@ {channel['name']}")
+        elif channel["kind"] == "aggregate":
+            at_home = (self.current_context or {}).get("kind") == "home"
+            self.lbl_target.configure(text=f"{'@' if at_home else '#'} {channel['name']}")
         else:
             self.lbl_target.configure(text=f"# {channel['name']}")
 
@@ -1240,26 +1261,59 @@ class DiscordToolGUI(ctk.CTk):
         self._clear_timeline()
         generation = self._scan_generation
 
-        # The channel search endpoint covers both DMs and guild text channels.
+        # The history endpoint covers both DMs and guild text channels.
         query = self.entry_filter.get().strip() or None
 
+        if channel.get("kind") == "aggregate":
+            # Sweep every channel of the current context in one pass.
+            at_home = (self.current_context or {}).get("kind") == "home"
+            targets = list(self.dm_channels) if at_home else list(
+                self.guild_channels.get((self.current_context or {}).get("guild_id"), [])
+            )
+            targets = [t for t in targets if t.get("id")]
+            label = "DMs" if at_home else "channels"
+        else:
+            targets = [channel]
+            label = None
+
         def run_scan():
-            try:
-                msgs, errors = self.deleter.scan_messages(
-                    context_id=channel["id"],
-                    is_dm=True,
-                    content_query=query,
-                    min_id=min_id,
-                    max_id=max_id,
-                    progress_callback=lambda batch: self._queue_rows(batch, generation),
-                    stop_event=self.stop_event,
-                )
-                self._post(lambda: self.on_scan_complete(msgs, errors, generation))
-            except AuthenticationError:
-                self._post(self._on_token_invalid)
-            except Exception as exc:
-                error_message = str(exc)
-                self._post(lambda: self.on_scan_error(error_message, generation))
+            errors = []
+            collected = []
+            for index, target in enumerate(targets):
+                if self.stop_event.is_set():
+                    break
+                if label:
+                    name = target.get("name", "channel")
+                    status_text = (
+                        f"Scanning {label}: {len(targets) - index} left — {name}…"
+                    )
+                    self._post(lambda text=status_text: self._set_status(text))
+                try:
+                    msgs, scan_errors = self.deleter.scan_messages(
+                        context_id=target["id"],
+                        is_dm=True,
+                        content_query=query,
+                        min_id=min_id,
+                        max_id=max_id,
+                        progress_callback=lambda batch: self._queue_rows(batch, generation),
+                        stop_event=self.stop_event,
+                    )
+                    collected.extend(msgs)
+                    errors.extend(scan_errors)
+                except AuthenticationError:
+                    self._post(self._on_token_invalid)
+                    return
+                except Exception as exc:
+                    error_message = str(exc)
+                    errors.append(error_message)
+                    self._post(lambda m=error_message: self.log(f"Scan failed: {m}"))
+
+            def finish():
+                if label and self.stop_event.is_set():
+                    errors.append("Scan cancelled by user.")
+                self.on_scan_complete(collected, errors, generation)
+
+            self._post(finish)
 
         threading.Thread(target=run_scan, daemon=True).start()
 
@@ -1475,8 +1529,8 @@ class DiscordToolGUI(ctk.CTk):
         fields = [
             ("Delete delay min (s)", "delete_delay_min"),
             ("Delete delay max (s)", "delete_delay_max"),
-            ("Search delay min (s)", "search_delay_min"),
-            ("Search delay max (s)", "search_delay_max"),
+            ("Scan delay min (s)", "scan_delay_min"),
+            ("Scan delay max (s)", "scan_delay_max"),
             ("Abort after N failures", "max_consecutive_failures"),
         ]
         entries = {}

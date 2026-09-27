@@ -1,15 +1,10 @@
-"""Scan via Discord's search API and bulk delete the found messages."""
+"""Scan a channel's history and bulk delete the found messages."""
 
 import random
 
 from tqdm import tqdm
 
-from api_client import (
-    SEARCH_OFFSET_CAP,
-    SEARCH_PAGE_SIZE,
-    AuthenticationError,
-    DiscordAPIError,
-)
+from api_client import AuthenticationError, DiscordAPIError
 from utils import (
     logger,
     print_error,
@@ -21,8 +16,8 @@ from utils import (
 
 DELETE_DELAY_MIN = 1.2
 DELETE_DELAY_MAX = 2.0
-SEARCH_DELAY_MIN = 1.0
-SEARCH_DELAY_MAX = 2.0
+SCAN_DELAY_MIN = 0.35
+SCAN_DELAY_MAX = 0.7
 MAX_CONSECUTIVE_FAILURES = 15
 
 
@@ -46,26 +41,33 @@ class MessageDeleter:
     # --- Scanning -----------------------------------------------------------
 
     @staticmethod
-    def _normalize(raw_groups, target_author_id):
-        """Flatten search result groups into minimal message dicts, keeping
-        only actual hits (not context padding) authored by the target."""
+    def _normalize_history(page, channel_id, target_author_id, content_query, min_id, max_id):
+        """Filter a raw history page down to the target author's messages
+        inside the id window, optionally matching a keyword."""
+        needle = content_query.lower() if content_query else None
+        min_int = int(min_id) if min_id else None
+        max_int = int(max_id) if max_id else None
         normalized = []
-        for group in raw_groups or []:
-            messages = group if isinstance(group, list) else [group]
-            for msg in messages:
-                if msg.get("hit") is False:
-                    continue  # context message around a real hit
-                if msg.get("author", {}).get("id") != target_author_id:
-                    continue
-                normalized.append(
-                    {
-                        "id": msg["id"],
-                        "channel_id": msg["channel_id"],
-                        "content": msg.get("content", ""),
-                        "timestamp": msg.get("timestamp", ""),
-                        "attachments": bool(msg.get("attachments")),
-                    }
-                )
+        for msg in page or []:
+            msg_id = int(msg["id"])
+            if min_int is not None and msg_id < min_int:
+                continue  # older than the lower bound
+            if max_int is not None and msg_id >= max_int:
+                continue  # newer than the upper bound
+            if msg.get("author", {}).get("id") != target_author_id:
+                continue
+            content = msg.get("content", "")
+            if needle and needle not in content.lower():
+                continue
+            normalized.append(
+                {
+                    "id": msg["id"],
+                    "channel_id": channel_id,
+                    "content": content,
+                    "timestamp": msg.get("timestamp", ""),
+                    "attachments": bool(msg.get("attachments")),
+                }
+            )
         return normalized
 
     def scan_messages(
@@ -79,26 +81,30 @@ class MessageDeleter:
         progress_callback=None,
         stop_event=None,
     ):
-        """Collect messages authored by `author_id` (defaults to the logged-in
-        user) in a guild or DM channel. Discord caps search offsets at 5000,
-        so for larger result sets the scan re-windows with max_id and keeps
-        going until exhausted.
+        """Collect the target author's messages in one channel by walking its
+        history (100 per request — several times faster than the search
+        endpoint, and uncapped). ``is_dm`` is accepted for compatibility but
+        unused: the history endpoint is identical for DMs and guild channels.
+
+        Pagination walks newest -> oldest, so scanning stops early once the
+        messages fall below ``min_id`` (the time-range lower bound).
 
         Returns (messages, errors): messages sorted newest-first, errors is a
-        list of strings describing any search failures mid-scan.
+        list of strings describing any scan failures mid-scan.
         """
-        target_author = author_id or self.client.user_id
-        guild_id = None if is_dm else context_id
-        channel_id = context_id if is_dm else None
+        target_author = str(author_id or self.client.user_id)
+        channel_id = context_id
 
-        seen_ids = set()
         all_messages = []
         errors = []
-        offset = 0
-        window_max_id = max_id
         interrupted = False
+        cursor = None
+        delay_lo, delay_hi = self._delay_range(
+            "scan_delay_min", "scan_delay_max", SCAN_DELAY_MIN, SCAN_DELAY_MAX
+        )
+        pace = 1.0  # adaptive multiplier, grows on rate limits
 
-        print_info("Scanning via Discord search…")
+        print_info("Scanning channel history…")
 
         try:
             while True:
@@ -107,56 +113,35 @@ class MessageDeleter:
                     break
 
                 try:
-                    data = self.client.search_messages(
-                        guild_id=guild_id,
-                        channel_id=channel_id,
-                        author_id=target_author,
-                        content=content_query,
-                        min_id=min_id,
-                        max_id=window_max_id,
-                        offset=offset,
-                    )
+                    page = self.client.fetch_history(channel_id, before=cursor)
                 except AuthenticationError:
                     raise
                 except DiscordAPIError as exc:
-                    print_error(f"Search failed: {exc}")
+                    print_error(f"History fetch failed: {exc}")
                     errors.append(str(exc))
                     break
 
-                if not data:
-                    break
-
-                page = self._normalize(data.get("messages"), target_author)
-                total = int(data.get("total_results", 0))
-
-                new_messages = [msg for msg in page if msg["id"] not in seen_ids]
-                for msg in new_messages:
-                    seen_ids.add(msg["id"])
-                all_messages.extend(new_messages)
-                if progress_callback is not None and new_messages:
-                    progress_callback(new_messages)
-
-                print_info(f"  +{len(new_messages)} (total {len(all_messages)} of {total} matches)")
-
                 if not page:
-                    break  # end of current window
+                    break  # reached the beginning of the channel
 
-                offset += SEARCH_PAGE_SIZE
-                if offset >= min(total, SEARCH_OFFSET_CAP):
-                    if total > SEARCH_OFFSET_CAP:
-                        # Offset cap reached but more results exist — jump to
-                        # the oldest message found so far and start over.
-                        oldest = min(int(msg["id"]) for msg in page)
-                        window_max_id = str(oldest - 1)
-                        offset = 0
-                        print_info("Reached the 5000-result search cap — continuing with older messages…")
-                    else:
-                        break
-
-                search_lo, search_hi = self._delay_range(
-                    "search_delay_min", "search_delay_max", SEARCH_DELAY_MIN, SEARCH_DELAY_MAX
+                matches = self._normalize_history(
+                    page, str(channel_id), target_author, content_query, min_id, max_id
                 )
-                sleep_with_cancel(random.uniform(search_lo, search_hi), stop_event)
+                all_messages.extend(matches)
+                if progress_callback is not None and matches:
+                    progress_callback(matches)
+
+                # History is newest-first: once messages fall below the lower
+                # time bound, everything further back is out of range too.
+                oldest_id = int(page[-1]["id"])
+                if min_id and oldest_id < int(min_id):
+                    break
+                if len(page) < 100:
+                    break  # end of channel history
+
+                cursor = page[-1]["id"]
+                sleep_with_cancel(random.uniform(delay_lo, delay_hi) * pace, stop_event)
+
         except KeyboardInterrupt:
             print_warning("Scan interrupted — keeping partial results.")
             interrupted = True
@@ -164,7 +149,7 @@ class MessageDeleter:
 
         all_messages.sort(key=lambda msg: int(msg["id"]), reverse=True)
         suffix = " (partial)" if interrupted or errors else ""
-        print_success(f"Scan finished{suffix}: {len(all_messages)} unique messages found.")
+        print_success(f"Scan finished{suffix}: {len(all_messages)} messages found.")
         return all_messages, errors
 
     # --- Deletion ------------------------------------------------------------
