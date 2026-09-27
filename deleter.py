@@ -27,8 +27,21 @@ MAX_CONSECUTIVE_FAILURES = 15
 
 
 class MessageDeleter:
-    def __init__(self, client):
+    def __init__(self, client, settings=None):
         self.client = client
+        # Optional overrides (from settings.json); None -> module constants.
+        self.settings = dict(settings) if settings else {}
+
+    def _setting(self, key, default):
+        try:
+            return float(self.settings.get(key, default))
+        except (TypeError, ValueError):
+            return float(default)
+
+    def _delay_range(self, min_key, max_key, default_min, default_max):
+        lo = max(self._setting(min_key, default_min), 0.1)
+        hi = max(self._setting(max_key, default_max), lo)
+        return lo, hi
 
     # --- Scanning -----------------------------------------------------------
 
@@ -140,7 +153,10 @@ class MessageDeleter:
                     else:
                         break
 
-                sleep_with_cancel(random.uniform(SEARCH_DELAY_MIN, SEARCH_DELAY_MAX), stop_event)
+                search_lo, search_hi = self._delay_range(
+                    "search_delay_min", "search_delay_max", SEARCH_DELAY_MIN, SEARCH_DELAY_MAX
+                )
+                sleep_with_cancel(random.uniform(search_lo, search_hi), stop_event)
         except KeyboardInterrupt:
             print_warning("Scan interrupted — keeping partial results.")
             interrupted = True
@@ -200,6 +216,10 @@ class MessageDeleter:
         failed_messages = []
         deleted_ids = []
         cancelled = False
+        failure_limit = max(int(self._setting("max_consecutive_failures", MAX_CONSECUTIVE_FAILURES)), 1)
+        delay_lo, delay_hi = self._delay_range(
+            "delete_delay_min", "delete_delay_max", DELETE_DELAY_MIN, DELETE_DELAY_MAX
+        )
 
         iterator = tqdm(messages, desc="Deleting", unit="msg", ncols=80) if show_progress else messages
 
@@ -228,9 +248,9 @@ class MessageDeleter:
                     consecutive_failures += 1
                     failed_messages.append(msg)
                     logger.warning("Failed to delete %s (status=%s)", msg["id"], status)
-                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    if consecutive_failures >= failure_limit:
                         print_error(
-                            f"{MAX_CONSECUTIVE_FAILURES} deletions failed in a row — "
+                            f"{failure_limit} deletions failed in a row — "
                             "aborting to stay safe. Remaining messages were NOT touched."
                         )
                         cancelled = True
@@ -239,7 +259,7 @@ class MessageDeleter:
                 if progress_callback is not None:
                     progress_callback(deleted, failed, len(messages))
 
-                sleep_with_cancel(random.uniform(DELETE_DELAY_MIN, DELETE_DELAY_MAX), stop_event)
+                sleep_with_cancel(random.uniform(delay_lo, delay_hi), stop_event)
         except KeyboardInterrupt:
             print_warning("\nCtrl+C received — stopping after this message.")
             cancelled = True

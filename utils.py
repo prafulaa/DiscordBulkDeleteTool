@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 from colorama import Fore, Style, init
 
-VERSION = "3.1.0"
+VERSION = "3.2.0"
 
 DISCORD_EPOCH_MS = 1420070400000  # 2015-01-01T00:00:00Z
 SNOWFLAKE_RE = re.compile(r"^\d{15,21}$")
@@ -90,6 +90,26 @@ def date_to_snowflake(date_str, end_of_day=False):
     return str((unix_ms - DISCORD_EPOCH_MS) << 22)
 
 
+TIME_WINDOWS = {
+    "Last 1 minute": 60,
+    "Last 5 minutes": 300,
+    "Last 15 minutes": 900,
+    "Last 30 minutes": 1800,
+    "Last 1 hour": 3600,
+    "Last 6 hours": 21600,
+    "Last 12 hours": 43200,
+    "Last 24 hours": 86400,
+    "Last 7 days": 604800,
+    "Last 30 days": 2592000,
+}
+
+
+def relative_snowflake(seconds_ago):
+    """Snowflake boundary for `seconds_ago` before now (UTC)."""
+    dt = datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)
+    return str((int(dt.timestamp() * 1000) - DISCORD_EPOCH_MS) << 22)
+
+
 def snowflake_to_datetime(snowflake):
     """Convert a Discord snowflake to an aware UTC datetime, or None."""
     try:
@@ -112,6 +132,25 @@ def format_discord_timestamp(iso_string):
     if parsed is None:
         return str(iso_string)
     return parsed.astimezone().strftime("%b %d, %Y at %I:%M %p")
+
+
+def format_timestamp_compact(iso_string):
+    """Discord-style compact timestamp: 'Today at 3:05 PM',
+    'Yesterday at 3:05 PM' or '3/26/2025 5:12 PM'."""
+    if not iso_string:
+        return ""
+    parsed = parse_date(iso_string)
+    if parsed is None:
+        return str(iso_string)
+    local = parsed.astimezone()
+    today = datetime.now(timezone.utc).astimezone().date()
+    days = (today - local.date()).days
+    clock = f"{local.hour % 12 or 12}:{local.strftime('%M')} {local.strftime('%p')}"
+    if days == 0:
+        return f"Today at {clock}"
+    if days == 1:
+        return f"Yesterday at {clock}"
+    return f"{local.month}/{local.day}/{local.year} {clock}"
 
 
 # --- Misc ---------------------------------------------------------------

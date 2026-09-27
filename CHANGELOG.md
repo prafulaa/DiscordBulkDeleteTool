@@ -4,6 +4,36 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.2.0] - 2026-09-27
+
+### Added
+- **Time-range presets** in the GUI (dropdown) and CLI (menu): delete messages
+  from the last 1 minute, 5/15/30 minutes, 1/6/12/24 hours, 7 or 30 days — or
+  custom after/before dates.
+- **Persistent settings** (`settings.json`, gitignored): delete/search delay
+  ranges, consecutive-failure abort limit, and a confirmation toggle. Editable
+  via a settings dialog (⚙ in the GUI rail) or CLI menu option 3. Values are
+  clamped to safe ranges on load.
+- Visual audit pass (external review) driving a UI polish round: dense
+  Discord-style chat stream with message grouping (compact continuation rows
+  within ~7 minutes), hover tint with message ID revealed on hover, compact
+  "Today at / Yesterday at" timestamps, left-aligned section headers with
+  accent bars, live SESSION stats card (found/selected/deleted), attachment
+  text chips, unified blurple accent for the SCAN button, custom app icon +
+  dark Windows title bar, contextual status bar.
+- Message-list panels now use a tint sampled from the generated wallpaper, so
+  the aurora shows through (frosted-glass effect within tkinter's limits).
+- 16 new tests (settings clamping/persistence, time windows, compact
+  timestamps, panel tint, app icon) — 92 total.
+
+### Fixed
+- Grouped continuation rows inflated to 200px (CTkFrame default height
+  poisoning pack propagation) — rows now render tightly.
+- Attachment-only messages grouped into blank rows; they now always show a
+  full header with the attachment chip.
+- Duplicate "[Attachment]" placeholder shown under the attachment chip.
+- Stray bright specks in panel gutters (wallpaper star layer removed).
+
 ## [3.1.0] - 2026-09-27
 
 ### Added

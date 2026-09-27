@@ -22,10 +22,15 @@ first, and stay rate-limit safe with built-in pacing.
 
 - **GUI + CLI** — a Discord-styled desktop app (`gui.py`) and an interactive
   terminal flow (`main.py`).
-- **Selective deletion** — keyword filter, *after/before* date ranges, and a
-  clickable message timeline in the GUI.
+- **Time-range presets** — wipe everything from the last minute, 5/15/30
+  minutes, 1/6/12/24 hours, 7 or 30 days, or pick custom after/before dates.
+- **Selective deletion** — keyword filter, date ranges, and a dense chat-style
+  timeline in the GUI (with Discord-style message grouping and hover details).
 - **Dry-run mode** — preview exactly what would be deleted before anything
   happens.
+- **Settings that persist** — tune deletion/search delay ranges, the
+  consecutive-failure abort limit, and confirmation prompts (saved to
+  `settings.json`, editable in-app via the ⚙ rail button or CLI menu option 3).
 - **Big-channel support** — Discord caps search results at 5,000; the scan
   automatically re-windows and keeps going past that cap.
 - **Rate-limit safe** — honors Discord's `429` responses and `Retry-After`
@@ -148,12 +153,13 @@ api_client.py     Discord REST client (timeouts, retries, rate limits)
 deleter.py        Scan + bulk-delete engine (pagination, dry-run, cancellation)
 gui.py            CustomTkinter desktop app (Discord/ClearVision-style UI)
 theme.py          Procedural wallpaper + avatars (Pillow, no bundled images)
+settings.py       Persistent user settings (settings.json)
 main.py           Interactive CLI
 auth.py           Token loading (env var / token.txt / prompt)
 token_finder.py   Optional: find plaintext token from the local Discord app
 utils.py          Logging, snowflake/date helpers
 scripts/          Dev utilities (GUI screenshot generator)
-tests/            pytest suite (76 tests)
+tests/            pytest suite (92 tests)
 ```
 
 ## Development

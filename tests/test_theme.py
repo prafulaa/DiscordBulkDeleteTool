@@ -62,3 +62,24 @@ def test_load_custom_background_present(tmp_path, monkeypatch):
     loaded = theme.load_custom_background()
     assert isinstance(loaded, Image.Image)
     assert Path(loaded.filename).name == "background.png"
+
+
+def test_sample_panel_color_returns_dark_hex():
+    wallpaper = theme.build_wallpaper(300, 200)
+    tint = theme.sample_panel_color(wallpaper)
+    assert tint.startswith("#") and len(tint) == 7
+    r, g, b = int(tint[1:3], 16), int(tint[3:5], 16), int(tint[5:7], 16)
+    assert max(r, g, b) < 90  # stays dark enough for light text
+
+
+def test_generate_app_icon_rounded_and_opaque():
+    icon = theme.generate_app_icon(64)
+    assert icon.mode == "RGBA"
+    assert icon.getpixel((2, 2))[3] == 0        # outside the rounded square
+    assert icon.getpixel((32, 32))[3] == 255    # inside the square
+
+
+def test_save_app_icon(tmp_path):
+    target = tmp_path / "icon.ico"
+    theme.save_app_icon(str(target))
+    assert target.is_file() and target.stat().st_size > 0

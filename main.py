@@ -2,6 +2,7 @@
 
 import threading
 
+import settings as settings_store
 from api_client import AuthenticationError, DiscordAPIError, DiscordClient, NetworkError
 from auth import get_user_token
 from deleter import MessageDeleter
@@ -15,8 +16,21 @@ from utils import (
     print_info,
     print_success,
     print_warning,
+    relative_snowflake,
     validate_snowflake,
 )
+
+CLI_TIME_RANGES = [
+    ("Any time", None),
+    ("Last 1 minute", 60),
+    ("Last 15 minutes", 900),
+    ("Last 1 hour", 3600),
+    ("Last 6 hours", 21600),
+    ("Last 24 hours", 86400),
+    ("Last 7 days", 604800),
+    ("Last 30 days", 2592000),
+    ("Custom (after/before dates)", "custom"),
+]
 
 
 def _ask_date(prompt):
@@ -29,6 +43,26 @@ def _ask_date(prompt):
             print_error("Unrecognized date. Use YYYY-MM-DD (e.g. 2023-06-30).")
             continue
         return date_to_snowflake(raw)
+
+
+def _ask_time_range():
+    """Returns (min_id, max_id) snowflakes for the chosen window."""
+    print("")
+    for index, (label, _value) in enumerate(CLI_TIME_RANGES, start=1):
+        print(f"  {index}. {label}")
+    while True:
+        raw = input(f"Delete messages from? (1-{len(CLI_TIME_RANGES)}): ").strip()
+        if not raw.isdigit() or not (1 <= int(raw) <= len(CLI_TIME_RANGES)):
+            print_error("Pick a number from the list.")
+            continue
+        _label, value = CLI_TIME_RANGES[int(raw) - 1]
+        if value == "custom":
+            min_id = _ask_date("Delete messages sent AFTER a date? (YYYY-MM-DD, Enter to skip): ")
+            max_id = _ask_date("Delete messages sent BEFORE a date? (YYYY-MM-DD, Enter to skip): ")
+            return min_id, max_id
+        if value is None:
+            return None, None
+        return relative_snowflake(value), None
 
 
 def _ask_context_id():
@@ -49,7 +83,7 @@ def _print_preview(messages):
         print(f"  … and {len(messages) - 5} more")
 
 
-def _run_deletion(deleter, messages):
+def _run_deletion(deleter, app_settings, messages):
     """Interactive scan→preview→(dry-run)→delete flow for one context."""
     action = input("Action — [d]ry-run preview, [y] delete now, [n] cancel: ").strip().lower()
     if action == "d":
@@ -64,11 +98,49 @@ def _run_deletion(deleter, messages):
         return
 
     stop_event = threading.Event()
-    result = deleter.execute_deletion(messages, skip_confirm=False, stop_event=stop_event)
+    result = deleter.execute_deletion(
+        messages,
+        skip_confirm=not app_settings.get("confirm_before_delete", True),
+        stop_event=stop_event,
+    )
     if result["failed"]:
         print_warning(f"{result['failed']} messages failed to delete. Re-run the scan to retry them.")
     if result["cancelled"]:
         print_warning("The run stopped early — remaining messages were not touched.")
+
+
+def _edit_settings(app_settings):
+    print("\n--- Settings ---")
+    print(f"Delete delay range: {app_settings['delete_delay_min']}-"
+          f"{app_settings['delete_delay_max']}s per message")
+    print(f"Search delay range: {app_settings['search_delay_min']}-"
+          f"{app_settings['search_delay_max']}s per request")
+    print(f"Abort after: {app_settings['max_consecutive_failures']} consecutive failures")
+    print(f"Confirm before deleting: {'yes' if app_settings['confirm_before_delete'] else 'no'}")
+    print("Press Enter to keep a value unchanged. Slower is safer (Discord ToS).")
+
+    def ask_number(prompt, key, cast=float):
+        raw = input(prompt).strip()
+        if raw:
+            try:
+                app_settings[key] = cast(raw)
+            except ValueError:
+                print_error(f"Invalid number — keeping {key} unchanged.")
+
+    ask_number(f"New delete delay min (s) [{app_settings['delete_delay_min']}]: ", "delete_delay_min")
+    ask_number(f"New delete delay max (s) [{app_settings['delete_delay_max']}]: ", "delete_delay_max")
+    ask_number(f"New search delay min (s) [{app_settings['search_delay_min']}]: ", "search_delay_min")
+    ask_number(f"New search delay max (s) [{app_settings['search_delay_max']}]: ", "search_delay_max")
+    ask_number(f"Abort after N failures [{app_settings['max_consecutive_failures']}]: ",
+               "max_consecutive_failures", cast=int)
+    raw = input("Confirm before deleting? (y/n, Enter to keep): ").strip().lower()
+    if raw in ("y", "n"):
+        app_settings["confirm_before_delete"] = (raw == "y")
+
+    saved = settings_store.save_settings(app_settings)
+    app_settings.clear()
+    app_settings.update(saved)
+    print_success("Settings saved to settings.json")
 
 
 def main():
@@ -77,6 +149,7 @@ def main():
     print_warning("Delays are built in for safety — use this tool at your own risk.")
     print("")
 
+    app_settings = settings_store.load_settings()
     token = get_user_token()
     if not token:
         return
@@ -92,26 +165,29 @@ def main():
         return
 
     print_success(f"Logged in as {display_username(user_info)}")
-    deleter = MessageDeleter(client)
+    deleter = MessageDeleter(client, app_settings)
 
     while True:
         print("\n--- Menu ---")
         print("1. Delete messages from a DM (Direct Message)")
         print("2. Delete messages from a specific Server (Guild)")
-        print("3. Exit")
+        print("3. Settings")
+        print("4. Exit")
 
-        choice = input("Select an option (1-3): ").strip()
-        if choice == "3":
+        choice = input("Select an option (1-4): ").strip()
+        if choice == "4":
             print("Exiting.")
             break
+        if choice == "3":
+            _edit_settings(app_settings)
+            continue
         if choice not in ("1", "2"):
-            print_error("Please pick 1, 2 or 3.")
+            print_error("Please pick 1, 2, 3 or 4.")
             continue
 
         context_id = _ask_context_id()
         content_query = input("Optional: filter by keyword (Enter to skip): ").strip() or None
-        min_id = _ask_date("Delete messages sent AFTER a date? (YYYY-MM-DD, Enter to skip): ")
-        max_id = _ask_date("Delete messages sent BEFORE a date? (YYYY-MM-DD, Enter to skip): ")
+        min_id, max_id = _ask_time_range()
 
         try:
             messages, errors = deleter.scan_messages(
@@ -127,7 +203,7 @@ def main():
                 print_info("No messages found matching the criteria.")
                 continue
             _print_preview(messages)
-            _run_deletion(deleter, messages)
+            _run_deletion(deleter, app_settings, messages)
         except AuthenticationError:
             print_error("Your token stopped working (invalidated or expired). Restart and re-login.")
             break

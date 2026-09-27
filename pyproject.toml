@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "discord-bulk-delete-tool"
-version = "3.1.0"
+version = "3.2.0"
 description = "Safely bulk delete your own Discord messages in DMs and servers"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -47,7 +47,7 @@ discord-tool = "main:run_cli"
 discord-tool-gui = "gui:main"
 
 [tool.setuptools]
-py-modules = ["api_client", "auth", "deleter", "gui", "main", "token_finder", "utils"]
+py-modules = ["api_client", "auth", "deleter", "gui", "main", "settings", "theme", "token_finder", "utils"]
 
 [tool.ruff]
 line-length = 110

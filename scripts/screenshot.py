@@ -11,25 +11,34 @@ the window's bounding box.
 import ctypes
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import gui  # noqa: E402  (import applies Windows DPI awareness before Tk init)
 
+
+def _iso(dt):
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+
+_now = datetime.now(timezone.utc)
 DEMO_MESSAGES = [
-    ("hey, is anyone still using this channel?", "2025-03-26T21:12:00+00:00", False),
-    ("testing something, ignore me", "2025-03-26T21:14:00+00:00", False),
-    ("game night tonight at 8? bring snacks", "2025-03-26T21:30:00+00:00", False),
-    ("", "2025-03-26T21:31:00+00:00", True),
-    ("never mind, postponed to friday", "2025-03-26T21:33:00+00:00", False),
-    ("lol who remembered this server exists", "2025-02-14T18:02:00+00:00", False),
-    ("happy new year everyone!", "2025-01-01T00:03:00+00:00", False),
-    ("does anyone have that meme from last week", "2024-12-28T16:45:00+00:00", False),
-    ("here it is", "2024-12-28T16:47:00+00:00", True),
-    ("legend, thanks", "2024-12-28T16:49:00+00:00", False),
-    ("brb creating a bulk delete tool", "2024-12-28T16:51:00+00:00", False),
-    ("wait, that's illegal… actually it's just against ToS", "2024-12-28T16:52:00+00:00", False),
+    ("hey, is anyone still using this channel?", _iso(_now - timedelta(hours=1)), False),
+    ("testing something, ignore me", _iso(_now - timedelta(minutes=55)), False),
+    ("game night tonight at 8? bring snacks\n"
+     "we're doing pizza and probably Mario Kart after,\n"
+     "so don't make other plans", _iso(_now - timedelta(minutes=40)), False),
+    ("", _iso(_now - timedelta(minutes=38)), True),
+    ("never mind, postponed to friday", _iso(_now - timedelta(minutes=36)), False),
+    ("lol who remembered this server exists", _iso(_now - timedelta(days=1, hours=3)), False),
+    ("happy new year everyone!", _iso(_now - timedelta(days=9)), False),
+    ("does anyone have that meme from last week", _iso(_now - timedelta(days=12)), False),
+    ("here it is", _iso(_now - timedelta(days=12)), True),
+    ("legend, thanks", _iso(_now - timedelta(days=12)), False),
+    ("brb creating a bulk delete tool", _iso(_now - timedelta(days=12)), False),
+    ("wait, that's illegal… actually it's just against ToS", _iso(_now - timedelta(days=12)), False),
 ]
 
 
@@ -114,8 +123,9 @@ def main():
         "global_name": "DemoUser",
     }
     app._refresh_user_panel()
-    app.entry_id.insert(0, "123456789012345678")
-    app._refresh_target_title()
+    app.entry_id.insert(0, "987654321098765432")
+    app.lbl_target.configure(text="# game-night  ›  987654321098765432")
+    app.time_range_var.set("Last 24 hours")
 
     messages = [
         {
@@ -127,13 +137,17 @@ def main():
         }
         for i, (content, timestamp, has_attachment) in enumerate(DEMO_MESSAGES)
     ]
-    app._schedule_cards(messages)
+    # The real scan renders newest-first — mirror that so Discord-style
+    # grouping (consecutive messages within ~7 minutes) behaves the same.
+    messages.sort(key=lambda m: m["timestamp"], reverse=True)
+    app._schedule_rows(messages)
 
-    for _ in range(80):  # let card batches and rendering settle
+    for _ in range(80):  # let row batches and rendering settle
         app.update()
         time.sleep(0.02)
 
     app.select_all()  # after rendering, so the checkboxes exist
+    app._set_status("Scan complete — 12 messages found in the last 24 hours. Review and delete.")
     for _ in range(10):
         app.update()
         time.sleep(0.02)

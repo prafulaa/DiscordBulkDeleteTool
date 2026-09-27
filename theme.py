@@ -11,7 +11,6 @@ license and credit its author).
 
 import hashlib
 import math
-import random
 from pathlib import Path
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
@@ -143,16 +142,6 @@ def build_wallpaper(width=2400, height=1500, seed=42):
 
     img = base.resize((width, height), _resample()).filter(ImageFilter.GaussianBlur(3))
 
-    # Star specks (added after the blur so they stay crisp)
-    stars = Image.new("RGB", (width, height), (0, 0, 0))
-    stars_draw = ImageDraw.Draw(stars)
-    rng = random.Random(seed)
-    for _ in range(int(width * height / 11000)):
-        x, y = rng.randrange(width), rng.randrange(height)
-        brightness = rng.randint(90, 200)
-        stars_draw.ellipse([x, y, x + 1, y + 1], fill=(brightness, brightness, brightness))
-    img = ImageChops.add(img, stars)
-
     # Vignette + final dark overlay so UI text stays readable
     img = ImageChops.multiply(img, Image.merge("RGB", (_vignette(width, height),) * 3))
     img = Image.blend(img, Image.new("RGB", (width, height), _DARK_OVERLAY), 0.40)
@@ -202,3 +191,50 @@ def build_avatar(letter, color, size=64):
 def default_avatar(size=64):
     """Neutral gray avatar with a question mark (logged-out state)."""
     return build_avatar("?", (80, 84, 94), size)
+
+
+# --- Derived panel colors & app icon -------------------------------------------
+
+def sample_panel_color(wallpaper, base=(20, 22, 30), blend=0.55, box=(0.30, 0.25, 0.98, 0.95)):
+    """Average the wallpaper over the message-area band and blend it toward a
+    neutral dark base. Used as the list/bottom panel color so the aurora
+    shows through as a subtle tint (frosted-glass illusion — tkinter has no
+    per-widget alpha)."""
+    width, height = wallpaper.size
+    region = wallpaper.crop(
+        (int(box[0] * width), int(box[1] * height), int(box[2] * width), int(box[3] * height))
+    ).resize((1, 1), _resample())
+    r, g, b = region.getpixel((0, 0))[:3]
+    tinted = _lerp(base, (r, g, b), 1 - blend)
+    return "#{:02x}{:02x}{:02x}".format(*tinted)
+
+
+def generate_app_icon(size=64):
+    """Blurple rounded square with a minimal white trash-can glyph (RGBA)."""
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle([0, 0, size - 1, size - 1], radius=int(size * 0.22), fill=(88, 101, 242, 255))
+
+    s = size / 64
+    white = (255, 255, 255, 255)
+    # Lid
+    draw.rounded_rectangle([16 * s, 16 * s, 48 * s, 21 * s], radius=2 * s, fill=white)
+    # Handle
+    draw.rectangle([27 * s, 12 * s, 37 * s, 16 * s], fill=white)
+    # Body (slightly tapered)
+    draw.polygon(
+        [(20 * s, 24 * s), (44 * s, 24 * s), (41 * s, 52 * s), (23 * s, 52 * s)],
+        fill=white,
+    )
+    # Slits (cut out with the icon background color)
+    cut = (88, 101, 242, 255)
+    draw.rectangle([28 * s, 28 * s, 31 * s, 47 * s], fill=cut)
+    draw.rectangle([33 * s, 28 * s, 36 * s, 47 * s], fill=cut)
+    return img
+
+
+def save_app_icon(path, size=64):
+    """Write the app icon as a multi-size .ico file."""
+    icon = generate_app_icon(size)
+    icon.save(path, format="ICO", sizes=[(16, 16), (32, 32), (48, 48), (64, 64)])
+    return path

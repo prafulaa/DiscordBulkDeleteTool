@@ -1,6 +1,6 @@
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -27,6 +27,17 @@ def test_date_to_snowflake_invalid():
     assert utils.date_to_snowflake(None) is None
 
 
+def test_relative_snowflake_matches_clock():
+    snowflake = utils.relative_snowflake(3600)
+    dt = utils.snowflake_to_datetime(snowflake)
+    delta = datetime.now(timezone.utc) - dt
+    assert timedelta(minutes=55) < delta < timedelta(minutes=65)
+
+
+def test_relative_snowflake_one_minute_is_newer_than_one_hour():
+    assert int(utils.relative_snowflake(60)) > int(utils.relative_snowflake(3600))
+
+
 def test_parse_date():
     parsed = utils.parse_date("2024-05-01")
     assert parsed is not None
@@ -47,6 +58,15 @@ def test_validate_snowflake():
     assert not utils.validate_snowflake("abcdefghijklmno")
     assert not utils.validate_snowflake("")
     assert not utils.validate_snowflake(None)
+
+
+def test_time_windows_cover_requested_range():
+    labels = " ".join(utils.TIME_WINDOWS)
+    assert "1 minute" in labels
+    assert "1 hour" in labels
+    assert "24 hours" in labels
+    for seconds in utils.TIME_WINDOWS.values():
+        assert seconds > 0
 
 
 def test_display_username_retired_discriminator():
@@ -87,6 +107,32 @@ def test_format_discord_timestamp_shape():
 def test_format_discord_timestamp_fallback():
     assert utils.format_discord_timestamp(None) == "unknown date"
     assert utils.format_discord_timestamp("not-a-date") == "not-a-date"
+
+
+def _utc_iso(dt):
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+
+def test_compact_timestamp_today():
+    now = datetime.now(timezone.utc) - timedelta(hours=1)
+    assert utils.format_timestamp_compact(_utc_iso(now)).startswith("Today at ")
+
+
+def test_compact_timestamp_yesterday():
+    yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+    assert utils.format_timestamp_compact(_utc_iso(yesterday)).startswith("Yesterday at ")
+
+
+def test_compact_timestamp_older_has_date():
+    old = datetime.now(timezone.utc) - timedelta(days=40)
+    formatted = utils.format_timestamp_compact(_utc_iso(old))
+    assert "/" in formatted and "AM" in formatted or "PM" in formatted
+    assert str(old.year) in formatted
+
+
+def test_compact_timestamp_invalid():
+    assert utils.format_timestamp_compact(None) == ""
+    assert utils.format_timestamp_compact("not-a-date") == "not-a-date"
 
 
 def test_sleep_with_cancel_returns_early():

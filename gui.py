@@ -2,30 +2,38 @@
 
 Layout & visual language inspired by Discord and the ClearVision theme
 (https://github.com/ClearVision/ClearVision-v6, Apache-2.0):
-icon rail → channel sidebar → chat-style message list over an aurora
-wallpaper that is generated procedurally at runtime (theme.py).
+icon rail → channel sidebar → dense chat-style message stream over an aurora
+wallpaper that is generated procedurally at runtime (theme.py). The message
+list / action-bar panels use a tint sampled from the wallpaper itself, which
+is as close as tkinter gets to frosted glass (no per-widget alpha).
 """
 
 import contextlib
 import ctypes
 import sys
+import tempfile
 import threading
 import webbrowser
 from datetime import datetime
+from pathlib import Path
 from tkinter import messagebox
 
 import customtkinter as ctk
 
+import settings as settings_store
 import theme
 from api_client import AuthenticationError, DiscordAPIError, DiscordClient, NetworkError
 from deleter import MessageDeleter
 from token_finder import find_tokens
 from utils import (
+    TIME_WINDOWS,
     VERSION,
     date_to_snowflake,
     display_username,
-    format_discord_timestamp,
+    format_timestamp_compact,
+    parse_date,
     print_info,
+    relative_snowflake,
 )
 
 # Crisp rendering on high-DPI Windows displays (must happen before Tk init)
@@ -37,8 +45,9 @@ if sys.platform == "win32":
             ctypes.windll.user32.SetProcessDPIAware()
 
 WALLPAPER_SIZE = (2400, 1500)
-CARD_BATCH_SIZE = 40
-CARD_FLUSH_DELAY_MS = 10
+ROW_BATCH_SIZE = 60
+ROW_FLUSH_DELAY_MS = 10
+GROUP_WINDOW_SECONDS = 420  # Discord groups consecutive messages within ~7 minutes
 AVATAR_CACHE = {}
 
 ctk.set_appearance_mode("Dark")
@@ -46,6 +55,7 @@ ctk.set_default_color_theme("dark-blue")
 
 C = theme.COLORS
 FONT = "Segoe UI"
+TIME_RANGE_VALUES = ["Any time", *TIME_WINDOWS.keys(), "Custom dates…"]
 
 
 def avatar_ctk_image(name, size_px):
@@ -64,7 +74,7 @@ class DiscordToolGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title(f"Discord Bulk Delete Tool — v{VERSION}")
+        self.title("Discord Bulk Delete Tool")
         self.geometry("1280x840")
         self.minsize(1080, 700)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -79,21 +89,47 @@ class DiscordToolGUI(ctk.CTk):
         self.token = ""
         self.logged_in_user = None
         self.target = "dm"  # "dm" | "guild"
+        self.app_settings = settings_store.load_settings()
         self.scanned_messages = []
         self.selected_ids = set()
         self.check_vars = {}
-        self.cards = {}
+        self.rows = {}
+        self.session_deleted = 0
         self.is_scanning = False
         self.is_deleting = False
         self.stop_event = threading.Event()
-        self._pending_cards = []
-        self._card_flush_scheduled = False
+        self._pending_rows = []
+        self._row_flush_scheduled = False
+        self._last_rendered_msg = None
 
         self._build_wallpaper_source()
         self._build_rail()
         self._build_sidebar()
         self._build_main()
         self.select_target("dm")
+        self._set_status("Not logged in — paste your token to begin.")
+        self._apply_window_chrome()
+
+    # --- Window chrome ---------------------------------------------------------
+
+    def _apply_window_chrome(self):
+        """Custom icon + dark Windows title bar (kills the stock-tkinter tell)."""
+        try:
+            icon_path = Path(tempfile.gettempdir()) / "discord_bulk_delete_tool.ico"
+            theme.save_app_icon(str(icon_path))
+            self.iconbitmap(str(icon_path))
+        except Exception:
+            pass
+        if sys.platform == "win32":
+            with contextlib.suppress(Exception):
+                hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
+                for attribute in (20, 19):  # DWMWA_USE_IMMERSIVE_DARK_MODE
+                    value = ctypes.c_int(1)
+                    result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                        hwnd, attribute, ctypes.byref(value), ctypes.sizeof(value)
+                    )
+                    if result == 0:
+                        break
 
     # --- Wallpaper -----------------------------------------------------------
 
@@ -106,16 +142,18 @@ class DiscordToolGUI(ctk.CTk):
                 wallpaper = theme.build_wallpaper(*WALLPAPER_SIZE)
         else:
             wallpaper = theme.build_wallpaper(*WALLPAPER_SIZE)
+        self._wallpaper_pil = wallpaper
         self._wallpaper_image = ctk.CTkImage(
             light_image=wallpaper, dark_image=wallpaper, size=WALLPAPER_SIZE
         )
+        # Panels pick up the wallpaper's hue — the frosted-glass illusion.
+        self.panel_tint = theme.sample_panel_color(wallpaper)
 
     # --- Icon rail -------------------------------------------------------------
 
     def _build_rail(self):
         rail = ctk.CTkFrame(self, width=68, corner_radius=0, fg_color=C["rail"])
         rail.grid(row=0, column=0, sticky="nsew")
-        rail.grid_rowconfigure(4, weight=1)
 
         logo = ctk.CTkLabel(
             rail, text="🧹", width=44, height=44, corner_radius=16,
@@ -125,67 +163,78 @@ class DiscordToolGUI(ctk.CTk):
 
         ctk.CTkFrame(rail, height=1, width=36, fg_color=C["text_faint"]).grid(row=1, column=0, padx=16)
 
-        btn_about = ctk.CTkButton(
-            rail, text="i", width=44, height=44, corner_radius=16,
-            fg_color=C["card"], hover_color=C["hover"], text_color=C["text_muted"],
-            font=ctk.CTkFont(family=FONT, size=17, weight="bold"), command=self.show_about,
-        )
-        btn_about.grid(row=2, column=0, padx=12, pady=10)
-
-        btn_github = ctk.CTkButton(
-            rail, text="↗", width=44, height=44, corner_radius=16,
-            fg_color=C["card"], hover_color=C["hover"], text_color=C["text_muted"],
-            font=ctk.CTkFont(family=FONT, size=16, weight="bold"),
-            command=lambda: webbrowser.open("https://github.com/prafulaa/DiscordBulkDeleteTool"),
-        )
-        btn_github.grid(row=3, column=0, padx=12, pady=10)
-
-        self.rail_dot = ctk.CTkLabel(rail, text="●", text_color=C["offline"], font=("Arial", 14))
-        self.rail_dot.grid(row=5, column=0, padx=12, pady=16)
+        rail_buttons = [
+            ("⚙\uFE0E", self.show_settings, "Settings"),
+            ("i", self.show_about, "About"),
+            ("↗", lambda: webbrowser.open("https://github.com/prafulaa/DiscordBulkDeleteTool"),
+             "GitHub"),
+        ]
+        for row_index, (glyph, command, _tip) in enumerate(rail_buttons, start=2):
+            ctk.CTkButton(
+                rail, text=glyph, width=44, height=44, corner_radius=16,
+                fg_color=C["card"], hover_color=C["hover"], text_color=C["text_muted"],
+                font=ctk.CTkFont(family=FONT, size=15, weight="bold"), command=command,
+            ).grid(row=row_index, column=0, padx=12, pady=8)
 
     # --- Sidebar -----------------------------------------------------------------
 
     def _section(self, parent, title):
-        """'— Text channels —' style section header with decorative lines."""
-        wrap = ctk.CTkFrame(parent, fg_color="transparent")
-        wrap.pack(fill="x", padx=14, pady=(16, 4))
-        wrap.grid_columnconfigure(0, weight=1)
-        wrap.grid_columnconfigure(2, weight=1)
-        ctk.CTkFrame(wrap, height=1, width=40, fg_color=C["text_faint"]).grid(
-            row=0, column=0, sticky="ew"
-        )
+        """Left-aligned micro-caps label with a blurple accent bar (Discord style)."""
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=16, pady=(16, 5))
+        ctk.CTkFrame(row, width=3, height=13, corner_radius=2, fg_color=C["primary"]).pack(side="left")
         ctk.CTkLabel(
-            wrap, text=title, text_color=C["text_muted"],
+            row, text=title, anchor="w", text_color=C["text_muted"],
             font=ctk.CTkFont(family=FONT, size=11, weight="bold"),
-        ).grid(row=0, column=1, padx=10)
-        ctk.CTkFrame(wrap, height=1, width=40, fg_color=C["text_faint"]).grid(
-            row=0, column=2, sticky="ew"
-        )
+        ).pack(side="left", padx=8)
 
     def _build_sidebar(self):
         sidebar = ctk.CTkFrame(self, width=300, corner_radius=0, fg_color=C["sidebar"])
         sidebar.grid(row=0, column=1, sticky="nsew")
         sidebar.pack_propagate(False)
 
-        # Header strip (server-selector style)
-        header = ctk.CTkFrame(sidebar, height=46, corner_radius=0, fg_color=C["header"])
+        # Header strip (server-selector style) — mini logo, no emoji text
+        header = ctk.CTkFrame(sidebar, height=48, corner_radius=0, fg_color=C["header"])
         header.pack(side="top", fill="x")
         ctk.CTkLabel(
-            header, text="🧹 Bulk Delete Tool", anchor="w", text_color=C["text"],
+            header, text="🧹", width=26, height=26, corner_radius=8, fg_color=C["primary"],
+            font=ctk.CTkFont(family="Segoe UI Emoji", size=13),
+        ).pack(side="left", padx=(12, 8), pady=11)
+        ctk.CTkLabel(
+            header, text="Bulk Delete Tool", anchor="w", text_color=C["text"],
             font=ctk.CTkFont(family=FONT, size=13, weight="bold"),
-        ).pack(side="left", padx=14, pady=10)
+        ).pack(side="left")
         ctk.CTkLabel(
             header, text=f"v{VERSION}", text_color=C["text_faint"],
             font=ctk.CTkFont(family=FONT, size=11),
-        ).pack(side="right", padx=14)
+        ).pack(side="right", padx=12)
 
-        # Bottom-first: user panel, then progress bar above it
+        # Bottom-first packing: user panel → progress → bottom cluster → body
         panel = ctk.CTkFrame(sidebar, height=62, corner_radius=0, fg_color=C["header"])
         panel.pack(side="bottom", fill="x")
         self.sidebar_progress = ctk.CTkProgressBar(
             sidebar, height=4, progress_color=C["primary"], fg_color=C["input"]
         )
         self.sidebar_progress.set(0)
+
+        cluster = ctk.CTkFrame(sidebar, fg_color="transparent")
+        cluster.pack(side="bottom", fill="x")
+
+        # SESSION stats card — fills the sidebar's lower region with live data
+        stats = ctk.CTkFrame(cluster, fg_color=C["card"], corner_radius=10)
+        stats.pack(fill="x", padx=14, pady=(4, 4))
+        stats.grid_columnconfigure((0, 1, 2), weight=1)
+        self.stat_found = self._stat_cell(stats, 0, "FOUND")
+        self.stat_selected = self._stat_cell(stats, 1, "SELECTED")
+        self.stat_deleted = self._stat_cell(stats, 2, "DELETED")
+
+        self._section(cluster, "SCAN")
+        self.btn_scan = ctk.CTkButton(
+            cluster, text="SCAN MESSAGES", height=38, corner_radius=8,
+            fg_color=C["primary"], hover_color=C["primary_hover"],
+            font=ctk.CTkFont(family=FONT, size=13, weight="bold"), command=self.start_scan,
+        )
+        self.btn_scan.pack(fill="x", padx=14, pady=(2, 12))
 
         body = ctk.CTkFrame(sidebar, fg_color="transparent")
         body.pack(side="top", fill="both", expand=True)
@@ -243,7 +292,21 @@ class DiscordToolGUI(ctk.CTk):
         )
         self.entry_filter.pack(fill="x", padx=16, pady=(0, 6))
 
-        dates_row = ctk.CTkFrame(body, fg_color="transparent")
+        ctk.CTkLabel(
+            body, text="Time range", anchor="w", text_color=C["text_muted"],
+            font=ctk.CTkFont(family=FONT, size=10),
+        ).pack(fill="x", padx=18, pady=(0, 2))
+        self.time_range_var = ctk.StringVar(value="Any time")
+        self.menu_time_range = ctk.CTkOptionMenu(
+            body, values=TIME_RANGE_VALUES, variable=self.time_range_var, height=34,
+            fg_color=C["input"], button_color=C["hover"], button_hover_color=C["card"],
+            text_color=C["text"], font=ctk.CTkFont(family=FONT, size=12),
+            corner_radius=8, command=self._on_time_range_change,
+        )
+        self.menu_time_range.pack(fill="x", padx=16, pady=(0, 6))
+
+        self.dates_block = ctk.CTkFrame(body, fg_color="transparent")
+        dates_row = ctk.CTkFrame(self.dates_block, fg_color="transparent")
         dates_row.pack(fill="x", padx=16)
         dates_row.grid_columnconfigure(0, weight=1)
         dates_row.grid_columnconfigure(1, weight=1)
@@ -258,19 +321,12 @@ class DiscordToolGUI(ctk.CTk):
         )
         self.entry_before.grid(row=0, column=1, padx=(4, 0), sticky="ew")
         ctk.CTkLabel(
-            body, text="Dates optional — format YYYY-MM-DD", anchor="w",
-            text_color=C["text_faint"], font=ctk.CTkFont(family=FONT, size=10),
+            self.dates_block, text="Custom dates, format YYYY-MM-DD", anchor="w",
+            text_color=C["text_muted"], font=ctk.CTkFont(family=FONT, size=10),
         ).pack(fill="x", padx=18, pady=(3, 0))
+        # Hidden unless "Custom dates…" is selected in the time-range menu.
 
-        # SCAN
-        self._section(body, "SCAN")
-        self.btn_scan = ctk.CTkButton(
-            body, text="SCAN MESSAGES", height=38, corner_radius=8,
-            fg_color=C["success"], hover_color=C["success_hover"],
-            font=ctk.CTkFont(family=FONT, size=13, weight="bold"), command=self.start_scan,
-        )
-        self.btn_scan.pack(fill="x", padx=16, pady=(2, 4))
-
+        # User panel
         self.panel_avatar = ctk.CTkLabel(panel, text="", image=avatar_ctk_image(None, 36))
         self.panel_avatar.pack(side="left", padx=(12, 8), pady=12)
         names = ctk.CTkFrame(panel, fg_color="transparent")
@@ -292,23 +348,38 @@ class DiscordToolGUI(ctk.CTk):
         )
         self.btn_logout.pack(side="right", padx=12)
 
+    @staticmethod
+    def _stat_cell(parent, column, label):
+        cell = ctk.CTkFrame(parent, fg_color="transparent")
+        cell.grid(row=0, column=column, pady=10, sticky="ew")
+        value = ctk.CTkLabel(
+            cell, text="0", text_color=C["text"],
+            font=ctk.CTkFont(family=FONT, size=16, weight="bold"),
+        )
+        value.pack()
+        ctk.CTkLabel(
+            cell, text=label, text_color=C["text_faint"],
+            font=ctk.CTkFont(family=FONT, size=9, weight="bold"),
+        ).pack()
+        return value
+
     # --- Main area ----------------------------------------------------------------
 
     def _build_main(self):
-        main = ctk.CTkFrame(self, corner_radius=0, fg_color=C["list"])
+        main = ctk.CTkFrame(self, corner_radius=0, fg_color=self.panel_tint)
         main.grid(row=0, column=2, sticky="nsew")
         main.grid_rowconfigure(1, weight=1)
-        main.grid_columnconfigure(0, weight=0)  # title
+        main.grid_columnconfigure(0, weight=0)  # title chip
         main.grid_columnconfigure(1, weight=1)  # spacer — wallpaper shows through
 
         wallpaper = ctk.CTkLabel(main, text="", image=self._wallpaper_image)
         wallpaper.place(relx=0.5, rely=0.5, anchor="center")
 
         # Top bar — widgets sit directly over the wallpaper; the gaps between
-        # them stay transparent so the aurora background stays visible.
+        # them stay open so the aurora background stays visible.
         self.lbl_target = ctk.CTkLabel(
             main, text="# direct-messages", anchor="w", text_color=C["text"],
-            fg_color=C["list"], corner_radius=14,
+            fg_color=self.panel_tint, corner_radius=14,
             font=ctk.CTkFont(family=FONT, size=15, weight="bold"),
         )
         self.lbl_target.grid(row=0, column=0, sticky="w", padx=(12, 4), pady=(8, 4), ipadx=14, ipady=6)
@@ -329,15 +400,15 @@ class DiscordToolGUI(ctk.CTk):
 
         self.lbl_counts = ctk.CTkLabel(
             main, text="", text_color=C["text_muted"],
-            fg_color=C["list"], corner_radius=14,
+            fg_color=self.panel_tint, corner_radius=14,
             font=ctk.CTkFont(family=FONT, size=12),
         )
         self.lbl_counts.grid(row=0, column=4, sticky="e", padx=(4, 12), pady=(8, 4), ipadx=12, ipady=6)
 
-        # Message list — floating panel with wallpaper gutters around it
+        # Message stream — tinted panel with wallpaper gutters around it
         self.timeline = ctk.CTkScrollableFrame(
-            main, corner_radius=14, fg_color=C["list"],
-            scrollbar_button_color=C["card"], scrollbar_button_hover_color=C["hover"],
+            main, corner_radius=14, fg_color=self.panel_tint,
+            scrollbar_button_color=C["hover"], scrollbar_button_hover_color=C["text_muted"],
         )
         self.timeline.grid(row=1, column=0, columnspan=5, sticky="nsew", padx=12, pady=4)
         self.timeline.grid_columnconfigure(0, weight=1)
@@ -345,13 +416,13 @@ class DiscordToolGUI(ctk.CTk):
         self._show_empty_state()
 
         # Bottom action bar — message-input style strip
-        bottom = ctk.CTkFrame(main, corner_radius=14, fg_color=C["list"])
+        bottom = ctk.CTkFrame(main, corner_radius=14, fg_color=self.panel_tint)
         bottom.grid(row=2, column=0, columnspan=5, sticky="ew", padx=12, pady=(4, 12))
         bottom.grid_columnconfigure(1, weight=1)
 
         self.lbl_log = ctk.CTkLabel(
-            bottom, text="Ready — paste your token and log in to start.",
-            anchor="w", text_color=C["text_muted"], font=ctk.CTkFont(family=FONT, size=12),
+            bottom, text="Ready.", anchor="w", text_color=C["text_muted"],
+            font=ctk.CTkFont(family=FONT, size=12),
         )
         self.lbl_log.grid(row=0, column=0, sticky="ew", padx=14, pady=14)
 
@@ -378,7 +449,7 @@ class DiscordToolGUI(ctk.CTk):
 
     def _show_empty_state(self):
         self.empty_state = ctk.CTkFrame(self.timeline, fg_color="transparent")
-        self.empty_state.pack(fill="x", pady=(120, 0))
+        self.empty_state.pack(fill="x", pady=(110, 0))
         ctk.CTkLabel(
             self.empty_state, text="Welcome to Discord Bulk Delete Tool",
             text_color=C["text"], font=ctk.CTkFont(family=FONT, size=24, weight="bold"),
@@ -386,15 +457,18 @@ class DiscordToolGUI(ctk.CTk):
         ctk.CTkLabel(
             self.empty_state,
             text="This is the beginning of your cleanup.\n"
-                 "Log in, pick a target on the left, then press SCAN MESSAGES.",
+                 "Log in, pick a target and a time range on the left, then press SCAN MESSAGES.",
             text_color=C["text_muted"], justify="center",
             font=ctk.CTkFont(family=FONT, size=13),
         ).pack(pady=8)
 
     # --- Small helpers -----------------------------------------------------------
 
+    def _set_status(self, text):
+        self.lbl_log.configure(text=text)
+
     def log(self, text):
-        self.lbl_log.configure(text=f"[{datetime.now().strftime('%H:%M:%S')}] {text}")
+        self._set_status(f"[{datetime.now().strftime('%H:%M:%S')}] {text}")
         print_info(text)
 
     def _refresh_target_title(self):
@@ -414,6 +488,12 @@ class DiscordToolGUI(ctk.CTk):
                 hover_color=C["primary_hover"] if selected else C["hover"],
             )
         self._refresh_target_title()
+
+    def _on_time_range_change(self, value):
+        if value == "Custom dates…":
+            self.dates_block.pack(fill="x", padx=0, pady=(0, 2))
+        else:
+            self.dates_block.pack_forget()
 
     def request_stop(self):
         if self.is_scanning or self.is_deleting:
@@ -481,15 +561,18 @@ class DiscordToolGUI(ctk.CTk):
         self.client = client
         self.token = token
         self.logged_in_user = user
-        self.deleter = MessageDeleter(client)
+        self.session_deleted = 0
+        self.deleter = MessageDeleter(client, self.app_settings)
         self.btn_login.configure(state="normal", text="Logged in", fg_color=C["success"])
         self._refresh_user_panel()
-        self.log(f"Logged in as {display_username(user)}")
+        self._update_counts()
+        self._set_status(
+            f"Logged in as {display_username(user)} — choose a target and time range, then scan."
+        )
 
     def on_login_fail(self):
         self.btn_login.configure(state="normal", text="Login", fg_color=C["primary"])
         self.lbl_userstatus.configure(text="Invalid or expired token", text_color=C["danger"])
-        self.rail_dot.configure(text_color=C["offline"])
         self.log("Authentication failed")
 
     def logout(self):
@@ -502,12 +585,13 @@ class DiscordToolGUI(ctk.CTk):
         self.deleter = None
         self.logged_in_user = None
         self.token = ""
+        self.session_deleted = 0
         self.entry_token.delete(0, "end")
         self.btn_login.configure(text="Login", fg_color=C["primary"])
         self.lbl_userstatus.configure(text="Paste a token to begin", text_color=C["text_muted"])
-        self.rail_dot.configure(text_color=C["offline"])
         self._refresh_user_panel()
-        self.log("Logged out.")
+        self._update_counts()
+        self._set_status("Not logged in — paste your token to begin.")
 
     def _refresh_user_panel(self):
         user = self.logged_in_user
@@ -515,12 +599,10 @@ class DiscordToolGUI(ctk.CTk):
             name = display_username(user)
             self.lbl_username.configure(text=name, text_color=C["text"])
             self.lbl_userstatus.configure(text="Online — ready to clean", text_color=C["online"])
-            self.rail_dot.configure(text_color=C["online"])
         else:
             name = None
             self.lbl_username.configure(text="Not logged in", text_color=C["text"])
             self.lbl_userstatus.configure(text="Paste a token to begin", text_color=C["text_muted"])
-            self.rail_dot.configure(text_color=C["offline"])
         self.panel_avatar.configure(image=avatar_ctk_image(name, 36))
 
     def auto_find_token(self):
@@ -585,8 +667,9 @@ class DiscordToolGUI(ctk.CTk):
         for token, source in tokens:
             row = ctk.CTkFrame(scroll, fg_color=C["card"], corner_radius=10)
             row.pack(fill="x", pady=4, padx=4)
-            avatar = ctk.CTkLabel(row, text="", image=avatar_ctk_image(None, 30))
-            avatar.pack(side="left", padx=(10, 6), pady=8)
+            ctk.CTkLabel(row, text="", image=avatar_ctk_image(None, 30)).pack(
+                side="left", padx=(10, 6), pady=8
+            )
             ctk.CTkLabel(
                 row, text=source, font=ctk.CTkFont(family=FONT, size=12, weight="bold"),
                 text_color=C["text"],
@@ -601,40 +684,59 @@ class DiscordToolGUI(ctk.CTk):
                 command=lambda t=token, s=source: select(t, s),
             ).pack(side="right", padx=10)
 
-    # --- Message timeline (batched rendering) ------------------------------------------
+    # --- Message stream (batched rendering) ------------------------------------------
 
-    def _queue_cards(self, new_msgs):
-        self.after(0, lambda: self._schedule_cards(new_msgs))
+    def _queue_rows(self, new_msgs):
+        self.after(0, lambda: self._schedule_rows(new_msgs))
 
-    def _schedule_cards(self, new_msgs):
+    def _schedule_rows(self, new_msgs):
         if getattr(self, "empty_state", None) is not None and self.empty_state.winfo_exists():
             self.empty_state.destroy()
             self.empty_state = None
         self.scanned_messages.extend(new_msgs)
-        self._pending_cards.extend(new_msgs)
-        if not self._card_flush_scheduled:
-            self._card_flush_scheduled = True
-            self.after(CARD_FLUSH_DELAY_MS, self._flush_cards)
+        self._pending_rows.extend(new_msgs)
+        if not self._row_flush_scheduled:
+            self._row_flush_scheduled = True
+            self.after(ROW_FLUSH_DELAY_MS, self._flush_rows)
 
-    def _flush_cards(self):
-        batch = self._pending_cards[:CARD_BATCH_SIZE]
-        self._pending_cards = self._pending_cards[CARD_BATCH_SIZE:]
+    def _flush_rows(self):
+        batch = self._pending_rows[:ROW_BATCH_SIZE]
+        self._pending_rows = self._pending_rows[ROW_BATCH_SIZE:]
         for msg in batch:
-            self._add_message_card(msg)
+            self._add_message_row(msg)
         self._update_counts()
-        if self._pending_cards:
-            self.after(CARD_FLUSH_DELAY_MS, self._flush_cards)
+        if self._pending_rows:
+            self.after(ROW_FLUSH_DELAY_MS, self._flush_rows)
         else:
-            self._card_flush_scheduled = False
+            self._row_flush_scheduled = False
 
-    def _add_message_card(self, msg):
-        card = ctk.CTkFrame(self.timeline, fg_color=C["card"], corner_radius=10)
-        card.pack(fill="x", pady=4, padx=8)
+    def _is_grouped_with_previous(self, msg):
+        """Discord-style grouping: same channel within ~7 minutes of the
+        previously rendered (newer) message → compact row without header."""
+        previous = self._last_rendered_msg
+        self._last_rendered_msg = msg
+        if previous is None or previous.get("channel_id") != msg.get("channel_id"):
+            return False
+        newer = parse_date(previous.get("timestamp"))
+        older = parse_date(msg.get("timestamp"))
+        if newer is None or older is None:
+            return False
+        gap = (newer - older).total_seconds()
+        return 0 <= gap <= GROUP_WINDOW_SECONDS
+
+    def _add_message_row(self, msg):
+        grouped = self._is_grouped_with_previous(msg)
+        row = ctk.CTkFrame(self.timeline, fg_color=self.panel_tint, corner_radius=8)
+        row.pack(fill="x", padx=2, pady=1)
 
         username = self.logged_in_user["username"] if self.logged_in_user else "You"
         var = ctk.BooleanVar(value=False)
         self.check_vars[msg["id"]] = var
-        self.cards[msg["id"]] = card
+        self.rows[msg["id"]] = row
+
+        # Attachment-only messages have no body text; a grouped row with no
+        # content would render as a blank strip, so force a full header.
+        grouped = grouped and bool(msg.get("content"))
 
         def on_toggle():
             if var.get():
@@ -643,53 +745,99 @@ class DiscordToolGUI(ctk.CTk):
                 self.selected_ids.discard(msg["id"])
             self._update_counts()
 
-        avatar = ctk.CTkLabel(card, text="", image=avatar_ctk_image(username, 34))
-        avatar.pack(side="left", padx=(10, 8), pady=10)
-
-        info = ctk.CTkFrame(card, fg_color="transparent")
-        info.pack(side="left", fill="both", expand=True, pady=8)
-
-        top = ctk.CTkFrame(info, fg_color="transparent")
-        top.pack(fill="x")
-        ctk.CTkLabel(
-            top, text=username, text_color=C["text"],
-            font=ctk.CTkFont(family=FONT, size=13, weight="bold"),
-        ).pack(side="left")
-        ctk.CTkLabel(
-            top, text=format_discord_timestamp(msg.get("timestamp")),
-            text_color=C["text_faint"], font=ctk.CTkFont(family=FONT, size=11),
-        ).pack(side="left", padx=8)
-        if msg.get("attachments"):
-            ctk.CTkLabel(
-                top, text="📎 attachment", text_color=C["accent"],
-                font=ctk.CTkFont(family=FONT, size=10),
-            ).pack(side="left")
-
-        content = msg.get("content", "") or ("[Attachment]" if msg.get("attachments") else "")
-        ctk.CTkLabel(
-            info, text=content, anchor="w", justify="left", wraplength=600,
-            text_color=C["content"], font=ctk.CTkFont(family=FONT, size=12),
-        ).pack(fill="x", pady=(1, 0))
-
-        right = ctk.CTkFrame(card, fg_color="transparent")
+        # Right cluster first (so it never gets squeezed out): checkbox + hover ID
+        right = ctk.CTkFrame(row, fg_color="transparent")
         right.pack(side="right", padx=10)
+        id_label = ctk.CTkLabel(
+            right, text="", text_color=C["text_faint"],
+            font=ctk.CTkFont(family="Consolas", size=9), height=12,
+        )
+        id_label.pack(anchor="e")
         ctk.CTkCheckBox(
             right, text="", width=24, variable=var, command=on_toggle,
-            checkbox_width=20, checkbox_height=20, corner_radius=6,
+            checkbox_width=18, checkbox_height=18, corner_radius=5,
             border_color=C["text_faint"], fg_color=C["primary"], hover_color=C["primary_hover"],
-        ).pack(anchor="e")
-        ctk.CTkLabel(
-            right, text=msg["id"], text_color=C["text_faint"],
-            font=ctk.CTkFont(family="Consolas", size=9),
-        ).pack(anchor="e")
+        ).pack(anchor="e", pady=(2, 0))
 
-        # Click anywhere on the card (except the checkbox) toggles selection
+        if grouped:
+            # height=1: CTkFrame defaults to 200px, which would inflate the row
+            spacer = ctk.CTkFrame(row, width=46, height=1, fg_color="transparent")
+            spacer.pack(side="left", fill="y")
+        else:
+            ctk.CTkLabel(row, text="", image=avatar_ctk_image(username, 30)).pack(
+                side="left", padx=(10, 8), pady=8
+            )
+
+        info = ctk.CTkFrame(row, fg_color="transparent")
+        info.pack(side="left", fill="both", expand=True, pady=(6, 6) if not grouped else (1, 4))
+
+        if not grouped:
+            top = ctk.CTkFrame(info, fg_color="transparent")
+            top.pack(fill="x")
+            ctk.CTkLabel(
+                top, text=username, text_color=C["text"],
+                font=ctk.CTkFont(family=FONT, size=13, weight="bold"),
+            ).pack(side="left")
+            ctk.CTkLabel(
+                top, text=format_timestamp_compact(msg.get("timestamp")),
+                text_color=C["text_faint"], font=ctk.CTkFont(family=FONT, size=11),
+            ).pack(side="left", padx=8)
+            if msg.get("attachments"):
+                ctk.CTkLabel(
+                    top, text=" attachment ", corner_radius=6, fg_color=C["card"],
+                    text_color=C["accent"], font=ctk.CTkFont(family=FONT, size=10),
+                ).pack(side="left", padx=4)
+
+        # The green chip in the header already signals attachments — only show
+        # actual text in the body, never a duplicate "[Attachment]" placeholder.
+        content = msg.get("content", "")
+        ctk.CTkLabel(
+            info, text=content, anchor="w", justify="left", wraplength=640,
+            text_color=C["content"], font=ctk.CTkFont(family=FONT, size=12),
+        ).pack(fill="x")
+
+        self._bind_row_hover(row, msg["id"], id_label)
+
+        # Click anywhere on the row (except the checkbox) toggles selection
         def toggle(_event=None):
             var.set(not var.get())
             on_toggle()
 
-        for widget in (card, info, top, avatar):
+        for widget in (row, info):
             widget.bind("<Button-1>", toggle)
+
+    def _bind_row_hover(self, row, msg_id, id_label):
+        """Hover tint + reveal the message ID (no washed-out permanent labels)."""
+
+        def set_hover(active):
+            row.configure(fg_color=C["hover"] if active else self.panel_tint)
+            id_label.configure(text=msg_id if active else "")
+
+        def pointer_inside():
+            try:
+                widget = row.winfo_containing(row.winfo_pointerx(), row.winfo_pointery())
+            except (KeyError, RuntimeError):
+                return False
+            while widget is not None:
+                if widget is row:
+                    return True
+                parent = widget.winfo_parent()
+                widget = row.nametowidget(parent) if parent else None
+            return False
+
+        def enter(_event=None):
+            set_hover(True)
+
+        def leave(_event=None):
+            row.after(80, lambda: set_hover(pointer_inside()))
+
+        stack = [row]
+        while stack:
+            widget = stack.pop()
+            with contextlib.suppress(Exception):
+                widget.bind("<Enter>", enter)
+                widget.bind("<Leave>", leave)
+            stack.extend(widget.winfo_children())
 
     # --- Scanning ------------------------------------------------------------------------
 
@@ -706,10 +854,15 @@ class DiscordToolGUI(ctk.CTk):
             self.log("Invalid ID — it should be a long numeric snowflake.")
             return
 
-        dates = self._validate_dates()
-        if dates is None:
-            return
-        min_id, max_id = dates
+        preset = self.time_range_var.get()
+        min_id = max_id = None
+        if preset in TIME_WINDOWS:
+            min_id = relative_snowflake(TIME_WINDOWS[preset])
+        elif preset == "Custom dates…":
+            dates = self._validate_dates()
+            if dates is None:
+                return
+            min_id, max_id = dates
 
         self.stop_event = threading.Event()
         self.is_scanning = True
@@ -717,16 +870,18 @@ class DiscordToolGUI(ctk.CTk):
         self._show_progress(True)
         self.sidebar_progress.configure(mode="indeterminate")
         self.sidebar_progress.start()
+        self._set_status(f"Scanning {preset.lower()}…")
 
         # Clear previous results
         self.scanned_messages = []
-        self._pending_cards = []
-        self._card_flush_scheduled = False
+        self._pending_rows = []
+        self._row_flush_scheduled = False
+        self._last_rendered_msg = None
         for widget in self.timeline.winfo_children():
             widget.destroy()
         self.selected_ids.clear()
         self.check_vars.clear()
-        self.cards.clear()
+        self.rows.clear()
         self._update_counts()
         self._show_empty_state()
 
@@ -741,7 +896,7 @@ class DiscordToolGUI(ctk.CTk):
                     content_query=query,
                     min_id=min_id,
                     max_id=max_id,
-                    progress_callback=self._queue_cards,
+                    progress_callback=self._queue_rows,
                     stop_event=self.stop_event,
                 )
                 self.after(0, lambda: self.on_scan_complete(msgs, errors))
@@ -758,9 +913,11 @@ class DiscordToolGUI(ctk.CTk):
         for error in errors:
             self.log(f"Search reported: {error}")
         if msgs:
-            self.log(f"Scan complete — {len(msgs)} messages found. Select the ones to delete.")
+            self._set_status(
+                f"Scan complete — {len(msgs)} messages found. Select the ones to delete."
+            )
         else:
-            self.log("No messages found.")
+            self._set_status("No messages found for the selected filters.")
 
     def on_scan_error(self, message):
         self.stop_loading_ui()
@@ -769,7 +926,6 @@ class DiscordToolGUI(ctk.CTk):
     def _on_token_invalid(self):
         self.stop_loading_ui()
         self.lbl_userstatus.configure(text="Token invalid/expired", text_color=C["danger"])
-        self.rail_dot.configure(text_color=C["offline"])
         self.btn_login.configure(text="Login", fg_color=C["primary"], state="normal")
         self.log("Your token stopped working — paste a fresh one and log in again.")
 
@@ -794,7 +950,10 @@ class DiscordToolGUI(ctk.CTk):
             return
 
         count = len(msgs_to_del)
-        if not messagebox.askyesno("Confirm", f"Delete {count} messages?\nThis cannot be undone."):
+        confirmation_on = self.app_settings.get("confirm_before_delete", True)
+        if confirmation_on and not messagebox.askyesno(
+            "Confirm", f"Delete {count} messages?\nThis cannot be undone."
+        ):
             return
 
         self.stop_event = threading.Event()
@@ -828,30 +987,30 @@ class DiscordToolGUI(ctk.CTk):
     def update_delete_status(self, deleted, failed, total):
         if total > 0:
             self.bottom_progress.set((deleted + failed) / total)
-        self.log(f"Deleting: {deleted}/{total} (failed: {failed})")
+        self._set_status(f"Deleting: {deleted}/{total} (failed: {failed})")
 
     def on_del_complete(self, result):
         self.is_deleting = False
         self._show_progress(False)
         self.btn_stop.configure(state="disabled")
         self.btn_scan.configure(state="normal")
+        self.session_deleted += result["deleted"]
 
         deleted_ids = set(result["deleted_ids"])
         self.scanned_messages = [m for m in self.scanned_messages if m["id"] not in deleted_ids]
         for msg_id in deleted_ids:
-            card = self.cards.pop(msg_id, None)
-            if card is not None:
-                card.destroy()
+            row = self.rows.pop(msg_id, None)
+            if row is not None:
+                row.destroy()
             self.check_vars.pop(msg_id, None)
             self.selected_ids.discard(msg_id)
         self._update_counts()
         self.btn_delete.configure(state="disabled", text="DELETE SELECTED")
 
-        summary = f"Deletion finished — deleted: {result['deleted']}, failed: {result['failed']}."
+        summary = f"Deleted {result['deleted']}, failed {result['failed']}."
         if result["cancelled"]:
-            summary += " (stopped early)"
-        self.log(summary)
-        messagebox.showinfo("Done", summary)
+            summary += " (stopped early — remaining messages untouched)"
+        self._set_status(f"{summary} Total deleted this session: {self.session_deleted}.")
 
     def on_del_error(self, message):
         self.is_deleting = False
@@ -879,10 +1038,101 @@ class DiscordToolGUI(ctk.CTk):
         found = len(self.scanned_messages)
         selected = len(self.selected_ids)
         self.lbl_counts.configure(text=f"{found} found • {selected} selected")
+        self.stat_found.configure(text=str(found))
+        self.stat_selected.configure(text=str(selected))
+        self.stat_deleted.configure(text=str(self.session_deleted))
         if selected > 0 and not self.is_deleting:
             self.btn_delete.configure(state="normal", text=f"DELETE ({selected})")
         else:
             self.btn_delete.configure(state="disabled", text="DELETE SELECTED")
+
+    # --- Settings dialog -----------------------------------------------------------------------
+
+    def show_settings(self):
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Settings")
+        dialog.geometry("430x430")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.configure(fg_color=C["sidebar"])
+
+        x = self.winfo_x() + (self.winfo_width() - 430) // 2
+        y = self.winfo_y() + (self.winfo_height() - 430) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        ctk.CTkLabel(
+            dialog, text="Settings", font=ctk.CTkFont(family=FONT, size=17, weight="bold"),
+            text_color=C["text"],
+        ).pack(pady=(16, 2))
+        ctk.CTkLabel(
+            dialog,
+            text="Slower delays are safer (Discord ToS). Saved to settings.json.",
+            text_color=C["text_muted"], font=ctk.CTkFont(family=FONT, size=11),
+        ).pack(pady=(0, 10))
+
+        form = ctk.CTkFrame(dialog, fg_color="transparent")
+        form.pack(fill="both", expand=True, padx=20)
+        form.grid_columnconfigure(1, weight=1)
+
+        fields = [
+            ("Delete delay min (s)", "delete_delay_min"),
+            ("Delete delay max (s)", "delete_delay_max"),
+            ("Search delay min (s)", "search_delay_min"),
+            ("Search delay max (s)", "search_delay_max"),
+            ("Abort after N failures", "max_consecutive_failures"),
+        ]
+        entries = {}
+        for row_index, (label, key) in enumerate(fields):
+            ctk.CTkLabel(
+                form, text=label, anchor="w", text_color=C["text"],
+                font=ctk.CTkFont(family=FONT, size=12),
+            ).grid(row=row_index, column=0, sticky="ew", padx=(0, 10), pady=6)
+            entry = ctk.CTkEntry(
+                form, height=30, fg_color=C["input"], border_color=C["header"],
+                text_color=C["text"],
+            )
+            entry.insert(0, str(self.app_settings.get(key, "")))
+            entry.grid(row=row_index, column=1, sticky="ew", pady=6)
+            entries[key] = entry
+
+        confirm_var = ctk.BooleanVar(value=bool(self.app_settings.get("confirm_before_delete", True)))
+        ctk.CTkCheckBox(
+            form, text="Ask for confirmation before deleting",
+            variable=confirm_var, text_color=C["text"],
+            font=ctk.CTkFont(family=FONT, size=12), fg_color=C["primary"],
+            hover_color=C["primary_hover"],
+        ).grid(row=len(fields), column=0, columnspan=2, sticky="w", pady=12)
+
+        buttons = ctk.CTkFrame(dialog, fg_color="transparent")
+        buttons.pack(fill="x", padx=20, pady=(0, 16))
+        buttons.grid_columnconfigure(0, weight=1)
+        buttons.grid_columnconfigure(1, weight=1)
+
+        def save():
+            for key, entry in entries.items():
+                self.app_settings[key] = entry.get().strip()
+            self.app_settings["confirm_before_delete"] = bool(confirm_var.get())
+            self.app_settings.update(settings_store.save_settings(self.app_settings))
+            if self.client is not None:
+                self.deleter = MessageDeleter(self.client, self.app_settings)
+            self.log("Settings saved.")
+            dialog.destroy()
+
+        def reset_defaults():
+            for key, entry in entries.items():
+                entry.delete(0, "end")
+                entry.insert(0, str(settings_store.DEFAULTS[key]))
+            confirm_var.set(settings_store.DEFAULTS["confirm_before_delete"])
+
+        ctk.CTkButton(
+            buttons, text="Save", height=32, fg_color=C["primary"],
+            hover_color=C["primary_hover"], command=save,
+        ).grid(row=0, column=0, padx=(0, 4), sticky="ew")
+        ctk.CTkButton(
+            buttons, text="Reset defaults", height=32, fg_color=C["card"],
+            hover_color=C["hover"], text_color=C["text_muted"], command=reset_defaults,
+        ).grid(row=0, column=1, padx=(4, 0), sticky="ew")
 
     # --- About dialog (profile-card style) ----------------------------------------------------
 
